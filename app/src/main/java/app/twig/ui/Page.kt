@@ -81,10 +81,6 @@ fun Page(page: Node, listState: LazyListState, onMove: (List<Node>) -> Unit) {
 
     val actions = remember(drag, page) {
         object : RowActions {
-            override fun open(node: Node) {
-                Store.zoom = node
-            }
-
             override fun dragStart(node: Node): Boolean {
                 menuFor = null
                 Store.revealedId = null
@@ -98,22 +94,6 @@ fun Page(page: Node, listState: LazyListState, onMove: (List<Node>) -> Unit) {
                 if (!moved) menuFor = node.id
             }
 
-            override fun enter(node: Node, before: String, parts: List<String>, after: String) = Store.onEnter(node, before, parts, after)
-
-            override fun backspaceEmpty(node: Node): Boolean {
-                val i = page.children.indexOf(node)
-                return Store.backspaceEmpty(node, page.children.getOrNull(i - 1) ?: page.takeIf { it !== Store.root })
-            }
-
-            override fun toggleDone(node: Node) = Store.toggleDone(node)
-            override fun delete(node: Node) = Store.delete(listOf(node))
-            override fun toggleSelected(node: Node) {
-                val s = Store.selection ?: return
-                Store.selection = if (node.id in s) s - node.id else s + node.id
-            }
-
-            override fun openUrl(url: String) = Actions.openUrl(ctx, url)
-            override fun copy(text: String) = Actions.copy(ctx, text)
             override fun menuDismiss() {
                 menuFor = null
             }
@@ -213,7 +193,6 @@ fun Page(page: Node, listState: LazyListState, onMove: (List<Node>) -> Unit) {
 @Composable
 private fun Header(page: Node, editing: Boolean) {
     val cs = MaterialTheme.colorScheme
-    val ctx = LocalContext.current
     val fr = remember { FocusRequester() }
     TrackFocusAndEdits(page, fr)
     EditSession(page, editing)
@@ -238,7 +217,7 @@ private fun Header(page: Node, editing: Boolean) {
         )
         val url = page.url
         if (editing) UrlField(page)
-        else if (!url.isNullOrBlank()) LinkLine(url, { Actions.openUrl(ctx, it) }, { Actions.copy(ctx, it) })
+        else if (!url.isNullOrBlank()) LinkLine(url)
     }
 }
 

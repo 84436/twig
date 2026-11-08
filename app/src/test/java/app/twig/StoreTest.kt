@@ -67,6 +67,18 @@ class StoreTest {
     }
 
     @Test
+    fun undoMoveRespectsThreeLevels() {
+        val (a) = mk("a")
+        val (b) = mk("b", parent = a)
+        val (x) = mk("x", parent = b)
+        assertTrue(Store.move(listOf(x), root))
+        val undo = Store.notice!!.undo
+        mk("y", parent = x) // x is a list now; back under b, y would be 4 deep
+        undo()
+        assertSame(root, x.parent)
+    }
+
+    @Test
     fun batchDeleteUndoes() {
         val (p) = mk("p")
         val (x1, _, x3) = mk("x1", "x2", "x3", parent = p)
@@ -145,11 +157,24 @@ class StoreTest {
     }
 
     @Test
+    fun enterAtStartOfTitleKeepsIt() {
+        val (list) = mk("Groceries")
+        Store.onHeaderEnter(list, "", listOf("", ""), "Groceries")
+        assertEquals("Groceries", list.plain)
+        assertEquals(1, list.children.size)
+        assertEquals(list.children[0].id, Store.focusReq!!.nodeId)
+    }
+
+    @Test
     fun backspaceInEmptyBullet() {
         val (a, b) = mk("a", "")
-        assertTrue(Store.backspaceEmpty(b, a))
+        assertTrue(Store.backspaceEmpty(b))
         assertFalse(Store.isAlive(b))
-        assertFalse(Store.backspaceEmpty(a, null))
+        val (first) = mk("", parent = a)
+        assertTrue(Store.backspaceEmpty(first)) // lands in the list's title
+        val (top) = mk("")
+        Store.reorder(top, 0)
+        assertFalse(Store.backspaceEmpty(top)) // nothing above it on Home
     }
 
     @Test
@@ -162,11 +187,27 @@ class StoreTest {
         Store.create(links, 1, "", "https://example.com")
         val text = TextFormat.export(root)
         assertEquals(
-            "- Groceries\n\t- ~~Eggs~~\n\t\t- Cheese\n\t- Milk whole\n- Links\n\t- [Twig](https://github.com/84436/twig)\n\t- https://example.com\n",
+            "- Groceries\n\t- ~~Eggs~~\n\t\t- Cheese\n\t- Milk whole\n- Links\n\t- [Twig](https://github.com/84436/twig)\n\t- <https://example.com>\n",
             text,
         )
         Store.replaceAll(TextFormat.parse(text))
         assertEquals(text, TextFormat.export(Store.root))
+    }
+
+    @Test
+    fun trickyRoundTrips() {
+        Store.create(root, 0, "x", "https://x.com") // a link titled "x" is not a task
+        Store.create(root, 1, "", "mailto:a@b.c") // URL only, not http
+        Store.create(root, 2, "", "https://en.wikipedia.org/wiki/Foo_(bar).") // trailing punctuation
+        Store.create(root, 3, "one\r\ntwo") // a line break stays one bullet
+        val text = TextFormat.export(root)
+        Store.replaceAll(TextFormat.parse(text))
+        assertEquals(text, TextFormat.export(root))
+        val r = root.children
+        assertEquals(listOf("x", "", "", "one two"), r.map { it.plain })
+        assertEquals("mailto:a@b.c", r[1].url)
+        assertEquals("https://en.wikipedia.org/wiki/Foo_(bar).", r[2].url)
+        assertFalse(r[0].done)
     }
 
     @Test
@@ -211,7 +252,13 @@ class StoreTest {
         assertSame(inbox, n.parent)
         Store.delete(listOf(inbox))
         assertNull(Store.shareTarget) // gone: back to asking
-        Store.shareTarget = null
+        Store.notice!!.undo()
+        assertNull(Store.shareTarget) // and it stays that way: its id could come back as another bullet
+        // a replace-all keeps sending shares to the list with the same name
+        Store.shareTarget = inbox
+        Store.replaceAll(TextFormat.parse("- Other\n- Inbox"))
+        assertEquals("Inbox", Store.label(Store.shareTarget!!))
+        Store.replaceAll(TextFormat.parse("- Other"))
         assertNull(Store.shareTarget)
         // a bullet on the third level can't take more
         val (a) = mk("a")

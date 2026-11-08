@@ -91,7 +91,6 @@ import app.twig.data.Node
 import app.twig.data.Store
 import app.twig.data.TextFormat
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
@@ -142,9 +141,9 @@ fun MainScreen() {
     }
 
     LaunchedEffect(Unit) {
-        snapshotFlow { Store.notice }.filterNotNull().collect { n ->
-            snackbar.currentSnackbarData?.dismiss()
-            launch {
+        snapshotFlow { Store.notice }.collect { n ->
+            snackbar.currentSnackbarData?.dismiss() // also when an import clears it: no Undo into the new data
+            if (n != null) launch {
                 val r = snackbar.showSnackbar(n.message, actionLabel = "Undo", duration = SnackbarDuration.Short)
                 if (r == SnackbarResult.ActionPerformed) n.undo()
                 if (Store.notice === n) Store.notice = null

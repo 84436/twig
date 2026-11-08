@@ -1,7 +1,6 @@
 package app.twig.share
 
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -48,8 +47,8 @@ import app.twig.ui.LinkLabel
 import app.twig.ui.TwigTheme
 
 /**
- * Receives shares. With a chosen destination it saves right away; with "Always ask" it floats a
- * sheet over the app you shared from, and tapping a list saves and closes.
+ * Receives shares. With a chosen destination it saves right away, silently; with "Always ask" it
+ * floats a sheet over the app you shared from, and tapping a list saves and closes.
  */
 class ShareActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,12 +56,8 @@ class ShareActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val p = SharePayload.from(intent) ?: return finish()
         Store.awaitLoaded()
-        Store.shareTarget?.let { dest ->
-            save(p.title, p.url, dest)
-            // nothing else on screen says it worked
-            Toast.makeText(this, "Saved to ${Store.label(dest)}", Toast.LENGTH_SHORT).show()
-            return finish()
-        }
+        Store.ensureSeeded()
+        Store.shareTarget?.let { return save(p.title, p.url, it) }
         setContent {
             TwigTheme {
                 ShareSheet(p, onSave = { title, dest -> save(title, p.url, dest) }, onCancel = ::finish)
@@ -76,10 +71,6 @@ class ShareActivity : ComponentActivity() {
         finish()
     }
 
-    override fun onStop() {
-        super.onStop()
-        Store.flush()
-    }
 }
 
 @Composable

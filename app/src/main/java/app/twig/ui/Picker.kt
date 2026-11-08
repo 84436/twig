@@ -109,7 +109,7 @@ fun DestinationPicker(moving: List<Node>, onPick: (Node) -> Unit, modifier: Modi
     }
     Column(modifier) {
         SearchField(q, "Search lists…", fr, Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("pickerField")) {
-            entries.firstOrNull()?.let(onPick)
+            if (query.isNotBlank()) entries.firstOrNull()?.let(onPick)
         }
         LazyColumn(Modifier.fillMaxWidth().padding(top = 4.dp)) {
             items(entries, key = { it.id }) { n -> DestRow(n, searching = query.isNotBlank()) { onPick(n) } }

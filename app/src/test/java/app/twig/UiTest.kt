@@ -234,9 +234,14 @@ class UiTest {
         val n = lights
         swipe("text-${n.id}", -20f, steps = 4) // a nudge springs back
         rule.onNodeWithTag("delete-${n.id}").assertDoesNotExist()
+        rule.runOnIdle { n.url = "https://example.com" } // a taller row
         swipe("text-${n.id}", -32f)
         assertTrue(Store.isAlive(n)) // swiping alone never deletes
         assertNull(Store.focusedId) // nor starts editing
+        assertEquals(
+            rule.onNodeWithTag("row-${n.id}").fetchSemanticsNode().size.height,
+            rule.onNodeWithTag("delete-${n.id}").fetchSemanticsNode().size.height,
+        )
         rule.shot("05-swipe-delete")
         click("delete-${n.id}")
         assertFalse(Store.isAlive(n))
@@ -388,6 +393,9 @@ class UiTest {
 
     @Test
     fun clipboardExportAndImport() {
+        rule.runOnIdle { Store.delete(listOf(lights)) }
+        rule.waitForIdle()
+        rule.onNodeWithText("Undo").assertExists()
         menu("Copy all as text")
         assertEquals(TextFormat.export(Store.root), clipboard())
         assertTrue(clipboard()!!.startsWith("- Welcome to Twig\n\t- "))

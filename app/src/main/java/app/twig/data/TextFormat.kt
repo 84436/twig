@@ -8,7 +8,7 @@ import app.twig.share.LinkInfo
  *     - Groceries
  *     	- ~~Eggs~~                       completed
  *     	- [Twig](https://github.com/…)   bullet with a URL
- *     	- https://example.com            URL only
+ *     	- <https://example.com>          URL only
  *
  * Reading is lenient: any indentation, `*`/`+`/`1.` markers, `- [x]` tasks, lines without markers.
  * Anything nested deeper than [MAX_DEPTH] lands on the last level.
@@ -28,19 +28,20 @@ object TextFormat {
     }
 
     private fun line(n: Node): String {
-        val text = n.plain.replace('\n', ' ').trim()
+        val text = n.plain.lines().joinToString(" ").trim()
         val url = n.url
         val s = when {
             url == null -> text
-            text.isEmpty() -> url
+            text.isEmpty() -> "<$url>"
             else -> "[$text]($url)"
         }
         return if (n.done && s.isNotEmpty()) "~~$s~~" else s
     }
 
     private val marker = Regex("""^([-*+•]|\d+[.)])(\s+|$)""")
-    private val task = Regex("""^\[([ xX])]\s*""")
+    private val task = Regex("""^\[([ xX])](\s+|$)""") // not "[x](url)"
     private val link = Regex("""^\[(.*)]\((\S+)\)$""")
+    private val autolink = Regex("""^<(\S+)>$""")
 
     fun parse(text: String): List<Item> {
         val out = ArrayList<Item>()
@@ -68,6 +69,7 @@ object TextFormat {
             s = s.substring(2, s.length - 2)
         }
         link.matchEntire(s)?.let { return Item(it.groupValues[1].trim(), it.groupValues[2], done, depth) }
+        autolink.matchEntire(s)?.let { return Item("", it.groupValues[1], done, depth) }
         if (LinkInfo.findUrl(s) == s) return Item("", s, done, depth)
         return Item(s.trim(), null, done, depth)
     }

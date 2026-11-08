@@ -37,9 +37,10 @@ object Sites {
 
     private val repoPath = Regex("""/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)/?""")
     private val notOwners = setOf(
-        "about", "apps", "collections", "customer-stories", "enterprise", "events", "explore", "features",
-        "issues", "login", "marketplace", "new", "notifications", "orgs", "organizations", "pricing", "pulls",
-        "search", "security", "settings", "sponsors", "topics", "trending",
+        "about", "account", "advisories", "apps", "codespaces", "collections", "contact", "customer-stories",
+        "dashboard", "enterprise", "events", "explore", "features", "git-guides", "issues", "login", "marketplace",
+        "new", "notifications", "orgs", "organizations", "pricing", "pulls", "readme", "resources", "search",
+        "security", "settings", "site", "solutions", "sponsors", "stars", "team", "topics", "trending", "users",
     )
 
     /** Exactly github.com/owner/repo (a trailing slash is fine). Anything more or less stays plain. */

@@ -34,8 +34,6 @@ class FocusReq(val nodeId: Long, val cursor: Int)
 object Store {
     const val ROOT_ID = 0L
 
-    lateinit var appContext: Context
-        private set
     private lateinit var db: Db
     private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "twig-db") }
 
@@ -95,9 +93,8 @@ object Store {
 
     /** Starts loading on a background thread. Call [awaitLoaded] before touching the tree. */
     fun init(ctx: Context, dbName: String? = "twig4.db") {
-        appContext = ctx.applicationContext
         main = Handler(Looper.getMainLooper())
-        db = Db(appContext, dbName)
+        db = Db(ctx.applicationContext, dbName)
         val latch = CountDownLatch(1)
         loadLatch = latch
         loadError = null
@@ -167,8 +164,6 @@ object Store {
         }
         scheduleFlush()
     }
-
-    fun meta(k: String): String? = meta[k]
 
     fun setMeta(k: String, v: String) {
         if (meta[k] == v) return
@@ -364,7 +359,7 @@ object Store {
         bump()
         notice = Notice(if (list.size == 1) "Moved to ${label(dest)}" else "Moved ${list.size} to ${label(dest)}") {
             for ((n, p, i) in undo) {
-                if (isAlive(n) && isAlive(p)) {
+                if (isAlive(n) && canHold(p, listOf(n))) { // still fits: things may have moved in the meantime
                     detach(n)
                     place(n, p, i)
                 }
@@ -384,10 +379,10 @@ object Store {
             walk(n) {
                 ids.add(it.id)
                 byId.remove(it.id)
-                focusRequesters.remove(it.id)
             }
         }
         markDeleted(ids)
+        if (meta["shareTarget"]?.toLongOrNull() in ids) shareTarget = null // ids get reused after a restart
         var z = zoomState
         while (!isAlive(z)) z = z.parent ?: root
         zoom = z
@@ -440,6 +435,10 @@ object Store {
     /** Enter in a list's title: the new lines become its first bullets. */
     fun onHeaderEnter(z: Node, before: String, parts: List<String>, after: String) {
         if (!isAlive(z) || parts.size < 2) return
+        if (before.isEmpty() && parts.size == 2 && parts.all { it.isEmpty() }) {
+            focusReq = FocusReq(create(z, 0).id, 0) // Enter at the start keeps the title
+            return
+        }
         z.text.setTextAndPlaceCursorAtEnd(before + parts.first())
         dirty(z)
         addLines(z, 0, parts, after)
@@ -454,13 +453,17 @@ object Store {
         last?.let { focusReq = FocusReq(it.id, parts.last().length) }
     }
 
-    /** Backspace in an empty bullet: delete it and continue at the end of [prev]. */
-    fun backspaceEmpty(n: Node, prev: Node?): Boolean {
+    /** Backspace in an empty bullet: delete it and continue at the end of the one above (or the list's title). */
+    fun backspaceEmpty(n: Node): Boolean {
+        val p = n.parent ?: return false
+        val prev = p.children.getOrNull(p.children.indexOf(n) - 1) ?: p.takeIf { it !== root }
         if (n.text.text.isNotEmpty() || n.children.isNotEmpty() || !n.url.isNullOrBlank() || prev == null) return false
         val end = prev.text.text.length
         prev.text.edit { selection = TextRange(end) }
         val fr = focusRequesters[prev.id]
-        if (fr == null || runCatching { fr.requestFocus() }.isFailure) focusReq = FocusReq(prev.id, end)
+        // a list row has no text field to land in; don't leave a request for its title later
+        val canLand = prev.children.isEmpty() || prev === zoomState
+        if ((fr == null || runCatching { fr.requestFocus() }.isFailure) && canLand) focusReq = FocusReq(prev.id, end)
         delete(listOf(n), undoable = false)
         return true
     }
@@ -481,7 +484,7 @@ object Store {
             n.url = u
             dirty(n)
         }
-        if (isBlank(n) && n !== zoomState && !n.isAncestorOf(zoomState)) delete(listOf(n), undoable = false)
+        if (isBlank(n) && n !== zoomState) delete(listOf(n), undoable = false)
     }
 
     // ---------------------------------------------------------------- navigation
@@ -522,12 +525,12 @@ object Store {
         }
     }
 
-    /** Clipboard or file import: everything goes, [items] come in. */
+    /** Clipboard or file import: everything goes, [items] come in. Shares keep going to a list of the same name. */
     fun replaceAll(items: List<TextFormat.Item>) {
+        val target = shareTarget?.let(::label)
         markDeleted(byId.keys.toList())
         byId.clear()
         root.children.clear()
-        focusRequesters.clear()
         scrollMemory.clear()
         focusedId = null
         notice = null
@@ -538,6 +541,7 @@ object Store {
             val p = last[it.depth - 1] ?: root
             last[it.depth] = create(p, p.children.size, it.text, it.url, it.done)
         }
+        shareTarget = root.children.firstOrNull { label(it) == target }
         bump()
     }
 

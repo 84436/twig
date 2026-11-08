@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -76,6 +76,7 @@ import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -109,18 +110,11 @@ private const val LONG_PRESS_MS = 280L
 
 enum class MenuAction { MoveTo, Select, Copy, Share }
 
+/** What a row needs from its page: dragging and the long-press menu. Everything else goes to [Store]. */
 interface RowActions {
-    fun open(node: Node)
     fun dragStart(node: Node): Boolean
     fun drag(dy: Float)
     fun dragEnd(node: Node, moved: Boolean, cancelled: Boolean)
-    fun enter(node: Node, before: String, parts: List<String>, after: String)
-    fun backspaceEmpty(node: Node): Boolean
-    fun toggleDone(node: Node)
-    fun delete(node: Node)
-    fun toggleSelected(node: Node)
-    fun openUrl(url: String)
-    fun copy(text: String)
     fun menuDismiss()
     fun menu(node: Node, action: MenuAction)
 }
@@ -155,7 +149,7 @@ fun BulletRow(
     val swipe = remember { Animatable(0f) }
     val base = remember { FloatArray(1) } // where the row sat when the current swipe began
     val armed = remember { BooleanArray(1) }
-    val revealed = Store.revealedId == node.id
+    val revealed = Store.revealedId == node.id && !selecting
     LaunchedEffect(revealed) {
         if (!revealed && swipe.value != 0f) swipe.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
     }
@@ -191,7 +185,7 @@ fun BulletRow(
             .then(
                 if (selecting) {
                     Modifier
-                        .clickable { actions.toggleSelected(node) }
+                        .clickable { Store.selection?.let { s -> Store.selection = if (node.id in s) s - node.id else s + node.id } }
                         .semantics { stateDescription = if (selected == true) "Selected" else "Not selected" }
                 } else {
                     Modifier.pointerInput(node.id, actions) {
@@ -221,7 +215,7 @@ fun BulletRow(
                                 val target = when {
                                     base[0] == 0f && (raw >= threshold || (raw >= threshold * 0.5f && vx > flingPx)) -> {
                                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        actions.toggleDone(node)
+                                        Store.toggleDone(node)
                                         0f
                                     }
                                     raw < -reveal / 2 && vx < flingPx || raw < 0f && vx < -flingPx -> -reveal
@@ -235,7 +229,7 @@ fun BulletRow(
                 }
             )
     ) {
-        if (!selecting) DeleteButton(node, { swipe.value }) { actions.delete(node) }
+        if (!selecting) DeleteButton(node) { swipe.value }
         Row(
             Modifier
                 .fillMaxWidth()
@@ -249,7 +243,7 @@ fun BulletRow(
                         Modifier.background(bg)
                     }
                 )
-                .then(if (isList && !selecting) Modifier.pressGestures(node, { actions.open(node) }, actions) else Modifier)
+                .then(if (isList && !selecting) Modifier.pressGestures(node, { Store.zoom = node }, actions) else Modifier)
                 .padding(start = START_PAD, end = 12.dp),
             verticalAlignment = Alignment.Top,
         ) {
@@ -262,7 +256,7 @@ fun BulletRow(
                 }
                 val url = node.url
                 if (editing && !isList && !selecting) UrlField(node)
-                else if (!url.isNullOrBlank()) LinkLine(url, actions::openUrl, actions::copy, enabled = !selecting)
+                else if (!url.isNullOrBlank()) LinkLine(url, enabled = !selecting)
             }
             if (isList) {
                 Text(
@@ -278,18 +272,18 @@ fun BulletRow(
 
 /** Uncovered by swiping left; grows with the swipe. Tapping it is the only way to delete a bullet. */
 @Composable
-private fun DeleteButton(node: Node, offset: () -> Float, onClick: () -> Unit) {
+private fun BoxScope.DeleteButton(node: Node, offset: () -> Float) {
     val x = offset()
     if (x >= 0f) return
     val cs = MaterialTheme.colorScheme
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+    Box(Modifier.matchParentSize(), contentAlignment = Alignment.CenterEnd) {
         Column(
             Modifier
                 .fillMaxHeight()
                 .width(with(LocalDensity.current) { (-x).toDp() })
                 .clipToBounds()
                 .background(cs.error)
-                .clickable(onClick = onClick)
+                .clickable { Store.delete(listOf(node)) }
                 .testTag("delete-${node.id}"),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
@@ -327,7 +321,7 @@ private fun Dot(node: Node, isList: Boolean, canOpen: Boolean, selected: Boolean
             .size(BULLET_W, LINE_BOX)
             .testTag("bullet-${node.id}")
             .then(
-                if (selected == null && !isList) Modifier.pressGestures(node, if (canOpen) ({ actions.open(node) }) else null, actions)
+                if (selected == null && !isList) Modifier.pressGestures(node, if (canOpen) ({ Store.zoom = node }) else null, actions)
                 else Modifier
             )
             .drawBehind {
@@ -376,7 +370,7 @@ private fun NodeText(node: Node, canOpen: Boolean, actions: RowActions) {
         SplitOnNewline { before, parts, after ->
             // Enter on an empty bullet: done typing (the empty bullet then goes away)
             if (before.isEmpty() && after.isEmpty() && parts.size == 2 && parts.all { it.isEmpty() }) focus.clearFocus()
-            else actions.enter(node, before, parts, after)
+            else Store.onEnter(node, before, parts, after)
         }
     }
     BasicTextField(
@@ -391,7 +385,7 @@ private fun NodeText(node: Node, canOpen: Boolean, actions: RowActions) {
             .focusRequester(fr)
             .trackFocus(node)
             .onPreviewKeyEvent { e ->
-                e.type == KeyEventType.KeyDown && e.key == Key.Backspace && node.text.text.isEmpty() && actions.backspaceEmpty(node)
+                e.type == KeyEventType.KeyDown && e.key == Key.Backspace && node.text.text.isEmpty() && Store.backspaceEmpty(node)
             },
         textStyle = textStyle(node.done),
         inputTransformation = transformation,
@@ -403,10 +397,10 @@ private fun NodeText(node: Node, canOpen: Boolean, actions: RowActions) {
 
 /** TalkBack: everything the gestures do, as named actions. */
 private fun a11y(node: Node, canOpen: Boolean, actions: RowActions): List<CustomAccessibilityAction> = buildList {
-    add(CustomAccessibilityAction(if (node.done) "Mark not completed" else "Mark completed") { actions.toggleDone(node); true })
-    if (canOpen) add(CustomAccessibilityAction("Open") { actions.open(node); true })
+    add(CustomAccessibilityAction(if (node.done) "Mark not completed" else "Mark completed") { Store.toggleDone(node); true })
+    if (canOpen) add(CustomAccessibilityAction("Open") { Store.zoom = node; true })
     add(CustomAccessibilityAction("Move to…") { actions.menu(node, MenuAction.MoveTo); true })
-    add(CustomAccessibilityAction("Delete") { actions.delete(node); true })
+    add(CustomAccessibilityAction("Delete") { Store.delete(listOf(node)); true })
 }
 
 /**
@@ -476,7 +470,7 @@ internal fun UrlField(node: Node) {
             if (first) {
                 first = false
             } else if (Store.isAlive(node)) {
-                node.url = it
+                node.url = it.ifBlank { null }
                 Store.dirty(node)
             }
         }
@@ -538,13 +532,14 @@ fun LinkLabel(url: String, modifier: Modifier = Modifier) {
 
 /** Tap opens, long-press copies. */
 @Composable
-internal fun LinkLine(url: String, onOpen: (String) -> Unit, onCopy: (String) -> Unit, enabled: Boolean = true) {
+internal fun LinkLine(url: String, enabled: Boolean = true) {
+    val ctx = LocalContext.current
     LinkLabel(
         url,
         Modifier
             .padding(top = 2.dp)
             .clip(RoundedCornerShape(6.dp))
-            .then(if (enabled) Modifier.combinedClickable(onLongClick = { onCopy(url) }, onClick = { onOpen(url) }) else Modifier)
+            .then(if (enabled) Modifier.combinedClickable(onLongClick = { Actions.copy(ctx, url) }, onClick = { Actions.openUrl(ctx, url) }) else Modifier)
             .padding(vertical = 3.dp, horizontal = 2.dp)
             .testTag("link-$url"),
     )

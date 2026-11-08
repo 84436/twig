@@ -58,6 +58,13 @@ class ShareParseTest {
     }
 
     @Test
+    fun cleaningLeavesTheRestAlone() {
+        assertEquals("https://g.co/search?q=a+b&b=%2F", LinkInfo.clean("https://g.co/search?utm_source=x&q=a+b&b=%2F"))
+        assertEquals("https://a.com/p#frag", LinkInfo.clean("https://a.com/p?fbclid=1#frag"))
+        assertEquals("https://a.com/p?x&y=", LinkInfo.clean("https://a.com/p?x&y="))
+    }
+
+    @Test
     fun urlPunctuation() {
         assertEquals("https://en.wikipedia.org/wiki/Foo_(bar)", LinkInfo.findUrl("see https://en.wikipedia.org/wiki/Foo_(bar)."))
         assertEquals("https://a.com/b", LinkInfo.findUrl("(https://a.com/b)"))
@@ -98,6 +105,7 @@ class ShareParseTest {
         assertEquals(plain("github.com"), look("https://github.com/84436/twig?tab=readme"))
         assertEquals(plain("github.com"), look("https://github.com/84436/twig#readme"))
         assertEquals(plain("github.com"), look("https://github.com/features/copilot"))
+        assertEquals(plain("github.com"), look("https://github.com/advisories/GHSA-jfh8-c2jp-5v3q"))
         assertEquals(plain("gist.github.com"), look("https://gist.github.com/84436/abc"))
     }
 

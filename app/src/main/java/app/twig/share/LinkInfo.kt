@@ -49,21 +49,15 @@ object LinkInfo {
         return t
     }
 
-    /** Drops tracking parameters (utm_*, fbclid, YouTube's si, ...). */
-    fun clean(url: String): String = try {
-        val uri = Uri.parse(url)
-        val names = uri.queryParameterNames
+    /** Drops tracking parameters (utm_*, fbclid, YouTube's si, ...). Everything else stays byte for byte. */
+    fun clean(url: String): String {
+        val q = url.indexOf('?')
+        if (q < 0) return url
+        val end = url.indexOf('#', q).let { if (it < 0) url.length else it }
         val ytOrSpotify = isYouTube(url) || host(url).endsWith("spotify.com")
         fun tracking(k: String) = k.startsWith("utm_") || k in trackers || (ytOrSpotify && (k == "si" || k == "feature" || k == "pp"))
-        if (names.none(::tracking)) {
-            url
-        } else {
-            val b = uri.buildUpon().clearQuery()
-            for (k in names) if (!tracking(k)) for (v in uri.getQueryParameters(k)) b.appendQueryParameter(k, v)
-            b.build().toString()
-        }
-    } catch (_: Throwable) {
-        url
+        val kept = url.substring(q + 1, end).split('&').filter { it.isNotEmpty() && !tracking(it.substringBefore('=')) }
+        return url.substring(0, q) + (if (kept.isEmpty()) "" else "?" + kept.joinToString("&")) + url.substring(end)
     }
 
     /** Normalises titles that share sheets wrap in boilerplate. */

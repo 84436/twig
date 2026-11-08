@@ -36,7 +36,6 @@ class Db(context: Context, name: String?) : SQLiteOpenHelper(context, name, null
     }
 
     fun write(upserts: List<NodeRow>, deletes: Collection<Long>, meta: Map<String, String>) {
-        if (upserts.isEmpty() && deletes.isEmpty() && meta.isEmpty()) return
         val db = writableDatabase
         db.beginTransaction()
         try {
