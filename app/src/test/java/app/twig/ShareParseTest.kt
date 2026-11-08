@@ -1,12 +1,13 @@
 package app.twig
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.twig.share.Glyph
 import app.twig.share.LinkInfo
+import app.twig.share.LinkLook
 import app.twig.share.SharePayload
+import app.twig.share.Sites
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -20,9 +21,6 @@ class ShareParseTest {
         val p = SharePayload.parse("https://youtu.be/dQw4w9WgXcQ?si=Abc123xyz", "Never Gonna Give You Up")!!
         assertEquals("Never Gonna Give You Up", p.title)
         assertEquals("https://youtu.be/dQw4w9WgXcQ", p.url)
-        assertFalse(p.needsTitle)
-        assertTrue(LinkInfo.isYouTube(p.url!!))
-        assertTrue(LinkInfo.isVideo(p.url!!))
     }
 
     @Test
@@ -47,33 +45,15 @@ class ShareParseTest {
     }
 
     @Test
-    fun bareUrlNeedsTitle() {
-        val p = SharePayload.parse("https://example.com", null)!!
-        assertEquals("", p.title)
-        assertTrue(p.needsTitle)
-    }
-
-    @Test
-    fun subjectEqualToUrlIsIgnored() {
-        val p = SharePayload.parse("https://example.com/x", "https://example.com/x")!!
-        assertTrue(p.needsTitle)
+    fun bareUrlAndUrlSubject() {
+        assertEquals(SharePayload("", "https://example.com"), SharePayload.parse("https://example.com", null))
+        assertEquals(SharePayload("", "https://example.com/x"), SharePayload.parse("https://example.com/x", "https://example.com/x"))
     }
 
     @Test
     fun plainText() {
-        val p = SharePayload.parse("  buy milk\nand eggs ", null)!!
-        assertEquals("buy milk\nand eggs", p.title)
-        assertNull(p.url)
-    }
-
-    @Test
-    fun plainTextWithSubject() {
-        val p = SharePayload.parse("the body", "Subject")!!
-        assertEquals("Subject\nthe body", p.title)
-    }
-
-    @Test
-    fun nothing() {
+        assertEquals(SharePayload("buy milk\nand eggs", null), SharePayload.parse("  buy milk\nand eggs ", null))
+        assertEquals("Subject\nthe body", SharePayload.parse("the body", "Subject")!!.title)
         assertNull(SharePayload.parse("  ", null))
     }
 
@@ -85,9 +65,47 @@ class ShareParseTest {
     }
 
     @Test
-    fun labels() {
-        assertEquals("youtube.com/watch?v=1 · Rick", LinkInfo.label("https://m.youtube.com/watch?v=1", "Rick"))
-        assertEquals("nytimes.com/a", LinkInfo.label("https://www.nytimes.com/a/", null))
-        assertEquals("youtu.be/dQw4w9WgXcQ", LinkInfo.display("https://youtu.be/dQw4w9WgXcQ"))
+    fun normalize() {
+        assertEquals("https://example.com/x", LinkInfo.normalize(" example.com/x "))
+        assertEquals("https://Example.com", LinkInfo.normalize("Https://Example.com"))
+        assertEquals("mailto:a@b.c", LinkInfo.normalize("MAILTO:a@b.c"))
+    }
+
+    private fun look(url: String) = Sites.look(url)
+    private fun plain(text: String) = LinkLook(Glyph.Link, text)
+    private val yt = LinkLook(Glyph.Play, "YouTube")
+
+    @Test
+    fun youtubeVideosOnly() {
+        assertEquals(yt, look("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+        assertEquals(yt, look("https://youtu.be/dQw4w9WgXcQ"))
+        assertEquals(yt, look("https://m.youtube.com/watch?v=abc&t=10"))
+        assertEquals(yt, look("https://youtube.com/shorts/abc"))
+        assertEquals(yt, look("https://music.youtube.com/watch?v=abc"))
+        assertEquals(plain("youtube.com"), look("https://www.youtube.com/@channel"))
+        assertEquals(plain("youtube.com"), look("https://www.youtube.com/watch"))
+        assertEquals(plain("youtube.com"), look("https://www.youtube.com/"))
+    }
+
+    @Test
+    fun githubExactRepoOnly() {
+        assertEquals(plain("84436/twig"), look("https://github.com/84436/twig"))
+        assertEquals(plain("84436/twig"), look("https://github.com/84436/twig/"))
+        assertEquals(plain("84436/twig"), look("https://www.github.com/84436/twig"))
+        assertEquals(plain("github.com"), look("https://github.com/84436/twig/releases"))
+        assertEquals(plain("github.com"), look("https://github.com/"))
+        assertEquals(plain("github.com"), look("https://github.com/84436"))
+        assertEquals(plain("github.com"), look("https://github.com/84436/twig?tab=readme"))
+        assertEquals(plain("github.com"), look("https://github.com/84436/twig#readme"))
+        assertEquals(plain("github.com"), look("https://github.com/features/copilot"))
+        assertEquals(plain("gist.github.com"), look("https://gist.github.com/84436/abc"))
+    }
+
+    @Test
+    fun everythingElseShowsTheHost() {
+        assertEquals(plain("example.com"), look("https://www.example.com/a/b?c=d"))
+        assertEquals(plain("en.m.wikipedia.org"), look("https://en.m.wikipedia.org/wiki/X"))
+        assertEquals(plain("mailto:a@b.c"), look("mailto:a@b.c"))
+        assertEquals(plain("not a url"), look("not a url"))
     }
 }

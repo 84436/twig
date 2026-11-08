@@ -4,47 +4,32 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.geometry.Offset
-import app.twig.data.FlatRow
+import androidx.compose.runtime.withFrameNanos
 import app.twig.data.Node
 import app.twig.data.Store
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 /**
- * Drag & drop for the flattened outline.
- *
- * While dragging, the list shows [preview]: the real rows minus the dragged item's descendants
- * (they travel with it), with the dragged row moved to wherever the finger is. Horizontal
- * movement picks the nesting depth. On drop the preview position + depth is turned into a
- * (parent, after-sibling) pair and committed to the store.
+ * Drag to reorder bullets on one page. While dragging, the list shows [preview] (the page's bullets
+ * with the dragged one wherever the finger is); on drop that position goes to the store.
  */
 class DragState(
     private val listState: LazyListState,
     private val scope: CoroutineScope,
-    private val indentPx: Float,
     private val edgePx: Float,
     private val maxSpeedPx: Float,
 ) {
     var draggingId by mutableStateOf<Long?>(null)
         private set
-    var preview by mutableStateOf<List<FlatRow>?>(null)
-        private set
-    var targetDepth by mutableIntStateOf(0)
-        private set
-    var originDepth = 0
-        private set
-    var carried by mutableIntStateOf(0)
+    var preview by mutableStateOf<List<Node>?>(null)
         private set
 
     /** Row that was just dropped and is easing into its slot. */
@@ -53,19 +38,11 @@ class DragState(
     val settle = Animatable(0f)
 
     private var dy by mutableFloatStateOf(0f)
-    private var dx = 0f
     private var startOffset = 0
     private var headerCount = 0
-    private var zoom: Node? = null
     private var autoScroll: Job? = null
-    var onDepthChanged: (() -> Unit)? = null
 
-    val isDragging: Boolean get() = draggingId != null
-
-    private fun info(): LazyListItemInfo? {
-        val id = draggingId ?: return null
-        return listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id }
-    }
+    private fun info() = draggingId?.let { id -> listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id } }
 
     /** Where the dragged row's top edge is drawn: under the finger, but never off the list. */
     private fun visualTop(size: Int): Float {
@@ -79,46 +56,31 @@ class DragState(
         return visualTop(i.size) - i.offset
     }
 
-    fun start(node: Node, rows: List<FlatRow>, headerCount: Int, zoom: Node): Boolean {
+    fun start(node: Node, rows: List<Node>, headerCount: Int): Boolean {
         if (draggingId != null) return false
-        val idx = rows.indexOfFirst { it.node === node }
-        if (idx < 0) return false
-        val itemInfo = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == node.id } ?: return false
-        val row = rows[idx]
-        var end = idx + 1
-        while (end < rows.size && rows[end].depth > row.depth) end++
-        carried = end - idx - 1
-        preview = ArrayList<FlatRow>(rows.size).apply {
-            addAll(rows.subList(0, idx + 1))
-            addAll(rows.subList(end, rows.size))
-        }
-        startOffset = itemInfo.offset
+        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == node.id } ?: return false
+        preview = rows
+        startOffset = item.offset
         dy = 0f
-        dx = 0f
-        originDepth = row.depth
-        targetDepth = row.depth
         this.headerCount = headerCount
-        this.zoom = zoom
         draggingId = node.id
         autoScroll?.cancel()
         autoScroll = scope.launch { autoScrollLoop() }
         return true
     }
 
-    fun drag(delta: Offset) {
+    fun drag(deltaY: Float) {
         if (draggingId == null) return
-        dy += delta.y
-        dx += delta.x
+        dy += deltaY
         reorder()
-        updateDepth()
     }
 
     private fun reorder() {
         val list = preview ?: return
         val id = draggingId ?: return
-        val k = list.indexOfFirst { it.node.id == id }
-        if (k < 0) return
+        val k = list.indexOfFirst { it.id == id }
         val me = info() ?: return
+        if (k < 0) return
         val size = me.size
         val center = visualTop(size) + size / 2f
         var newK = -1
@@ -144,35 +106,16 @@ class DragState(
         if (newK == k) return
         val firstIdx = listState.firstVisibleItemIndex
         val firstOff = listState.firstVisibleItemScrollOffset
-        val m = ArrayList(list)
-        val item = m.removeAt(k)
-        m.add(newK, item)
-        preview = m
+        preview = list.toMutableList().apply { add(newK, removeAt(k)) }
         // LazyColumn anchors on the first visible key; keep the viewport still when that row moves.
         if (firstIdx == k + headerCount || firstIdx == newK + headerCount) {
             scope.launch { listState.scrollToItem(firstIdx, firstOff) }
         }
     }
 
-    private fun updateDepth() {
-        val list = preview ?: return
-        val k = list.indexOfFirst { it.node.id == draggingId }
-        if (k < 0) return
-        val prev = list.getOrNull(k - 1)
-        val next = list.getOrNull(k + 1)
-        val maxD = prev?.let { it.depth + 1 } ?: 0
-        val minD = next?.depth ?: 0
-        val want = originDepth + (dx / indentPx).roundToInt()
-        val d = want.coerceIn(minD, maxOf(minD, maxD))
-        if (d != targetDepth) {
-            targetDepth = d
-            onDepthChanged?.invoke()
-        }
-    }
-
     private suspend fun autoScrollLoop() {
         while (scope.isActive && draggingId != null) {
-            androidx.compose.runtime.withFrameNanos { }
+            withFrameNanos { }
             val me = info() ?: continue
             val top = visualTop(me.size)
             val bottom = top + me.size
@@ -182,71 +125,29 @@ class DragState(
                 bottom > vpEnd - edgePx -> maxSpeedPx * ((bottom - (vpEnd - edgePx)) / edgePx).coerceIn(0f, 1f)
                 else -> 0f
             }
-            if (speed != 0f) {
-                val used = listState.scrollBy(speed)
-                if (used != 0f) {
-                    reorder()
-                    updateDepth()
-                }
-            }
+            if (speed != 0f && listState.scrollBy(speed) != 0f) reorder()
         }
     }
 
-    /**
-     * Ends the drag. With [commit] the move is written to the store.
-     * Returns true when the tree changed.
-     */
-    fun end(commit: Boolean): Boolean {
-        val id = draggingId ?: return false
+    /** Ends the drag; with [commit] the new position is saved. */
+    fun end(commit: Boolean) {
+        val id = draggingId ?: return
         autoScroll?.cancel()
         autoScroll = null
         val list = preview
-        val z = zoom
         val fromY = offsetY()
-        var changed = false
-        if (commit && list != null && z != null) {
-            val k = list.indexOfFirst { it.node.id == id }
-            if (k >= 0) {
-                val (parent, after) = dropTarget(list, k, targetDepth, z)
-                changed = Store.moveTo(list[k].node, parent, after)
-            }
+        if (commit && list != null) {
+            val k = list.indexOfFirst { it.id == id }
+            if (k >= 0) Store.reorder(list[k], k)
         }
         draggingId = null
         preview = null
-        carried = 0
         dy = 0f
-        dx = 0f
         settlingId = id
         scope.launch {
             settle.snapTo(fromY)
             settle.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
             if (settlingId == id) settlingId = null
-        }
-        return changed
-    }
-
-    companion object {
-        /** Where a row at index [k] of [list] with depth [d] belongs. */
-        fun dropTarget(list: List<FlatRow>, k: Int, d: Int, zoom: Node): Pair<Node, Node?> {
-            var parent = zoom
-            if (d > 0) {
-                for (i in k - 1 downTo 0) {
-                    if (list[i].depth == d - 1) {
-                        parent = list[i].node
-                        break
-                    }
-                }
-            }
-            var after: Node? = null
-            for (i in k - 1 downTo 0) {
-                val r = list[i]
-                if (r.depth < d) break
-                if (r.depth == d) {
-                    after = r.node
-                    break
-                }
-            }
-            return parent to after
         }
     }
 }

@@ -1,8 +1,5 @@
 package app.twig.ui
 
-import android.content.Context
-import android.net.Uri
-import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,23 +10,21 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -37,9 +32,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -47,12 +42,13 @@ import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.SnackbarDuration
@@ -61,6 +57,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -85,46 +82,41 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import app.twig.data.Backup
-import app.twig.data.FocusReq
 import app.twig.data.Node
-import app.twig.data.Notice
 import app.twig.data.Store
+import app.twig.data.TextFormat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.time.LocalDate
 import kotlin.math.abs
 import kotlin.math.sign
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MainScreen() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val zoom = Store.zoom
-    val zoomed = zoom !== Store.root
     val query = rememberTextFieldState()
     val q = query.text.toString()
-    val searching = q.isNotBlank()
+    val selection = Store.selection
+    val searching = q.isNotBlank() && selection == null
     val version = Store.version
-    val results = remember(q, version) { if (q.isBlank()) emptyList() else Store.search(q) }
+    val results = remember(q, version) { Store.search(q) }
     val searchFocus = remember { FocusRequester() }
-    var moveTarget by remember { mutableStateOf<Node?>(null) }
+    var moving by remember { mutableStateOf<List<Node>?>(null) }
+    var importing by remember { mutableStateOf<List<TextFormat.Item>?>(null) }
+    var askTarget by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
-    val imeVisible = WindowInsets.isImeVisible
 
-    // One scroll position per zoom level, so zooming out lands where you were.
+    // One scroll position per list, so going back lands where you were.
     val listState = remember(zoom) {
         Store.scrollMemory[zoom.id]?.let { LazyListState(it.first, it.second) } ?: LazyListState()
     }
@@ -141,68 +133,37 @@ fun MainScreen() {
         Store.reveal(n)
     }
 
-    BackHandler(enabled = searching || zoomed) {
-        if (searching) closeSearch() else Store.zoomOut()
+    BackHandler(enabled = selection != null || searching || zoom !== Store.root) {
+        when {
+            selection != null -> Store.selection = null
+            searching -> closeSearch()
+            else -> Store.zoomOut()
+        }
     }
 
-    // An action notice (Undo) replaces whatever is showing; a plain message waits its turn
-    // instead of pushing an Undo away.
     LaunchedEffect(Unit) {
-        var showing: Notice? = null
         snapshotFlow { Store.notice }.filterNotNull().collect { n ->
-            if (n.action != null || showing?.action == null) snackbar.currentSnackbarData?.dismiss()
+            snackbar.currentSnackbarData?.dismiss()
             launch {
-                val r = snackbar.showSnackbar(n.message, actionLabel = n.actionLabel, duration = SnackbarDuration.Short)
-                if (r == SnackbarResult.ActionPerformed) n.action?.invoke()
+                val r = snackbar.showSnackbar(n.message, actionLabel = "Undo", duration = SnackbarDuration.Short)
+                if (r == SnackbarResult.ActionPerformed) n.undo()
                 if (Store.notice === n) Store.notice = null
             }
-            showing = n
         }
     }
 
-    val stamp = { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) }
-    val exportZip = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        if (uri != null) {
-            Store.flush()
-            val json = Backup.toJson(Store.root)
-            val images = Backup.attachmentsUnder(Store.root)
-            scope.launch {
-                val ok = withContext(Dispatchers.IO) {
-                    runCatching { ctx.contentResolver.openOutputStream(uri, "wt")!!.use { Backup.writeZip(ctx, it, json, images) } }.isSuccess
-                }
-                Store.notify(if (ok) "Backup saved (notes + ${images.size} images)" else "Couldn't write the backup")
-            }
-        }
+    val exportFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = TextFormat.export(Store.root)
+        scope.launch(Dispatchers.IO) { runCatching { ctx.contentResolver.openOutputStream(uri, "wt")!!.use { it.write(text.toByteArray()) } } }
     }
-    val exportMd = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
-        if (uri != null) {
-            val data = Backup.toMarkdown(Store.zoom)
-            scope.launch { write(ctx, uri, data, "Exported") }
-        }
-    }
-    val importDoc = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) scope.launch {
-            val read = withContext(Dispatchers.IO) {
-                runCatching {
-                    val name = ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-                        if (it.moveToFirst()) it.getString(0) else null
-                    }
-                    val bytes = ctx.contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-                    val text = if (Backup.isZip(bytes)) Backup.readZip(ctx, bytes) else bytes.toString(Charsets.UTF_8)
-                    name to text!!
-                }.getOrNull()
+    val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                runCatching { ctx.contentResolver.openInputStream(uri)!!.use { it.readBytes().toString(Charsets.UTF_8) } }.getOrDefault("")
             }
-            if (read == null) {
-                Store.notify("Couldn't read that file")
-                return@launch
-            }
-            val result = runCatching { Backup.import(read.second, read.first) }.getOrNull()
-            if (result == null) {
-                Store.notify("That file doesn't look like notes")
-            } else {
-                Store.reveal(result.first)
-                Store.notify("Imported ${result.second} items")
-            }
+            importing = TextFormat.parse(text)
         }
     }
 
@@ -215,57 +176,55 @@ fun MainScreen() {
                         .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
                 )
         ) {
-            SearchBar(
-                state = query,
-                focusRequester = searchFocus,
-                showBack = searching || zoomed,
-                backLabel = if (searching) "Close search" else "Zoom out",
-                onBack = { if (searching) closeSearch() else Store.zoomOut() },
-                onSubmit = { results.firstOrNull()?.let(open) },
-            ) {
-                MoreMenu(
-                    zoom = zoom,
-                    onExportJson = { exportZip.launch("twig-backup-${stamp()}.zip") },
-                    onExportMd = { exportMd.launch("twig-${stamp()}.md") },
-                    onImport = { importDoc.launch(arrayOf("application/zip", "application/json", "text/*", "application/xml", "text/x-opml", "*/*")) },
-                )
+            if (selection != null) {
+                SelectionBar(selection.size, all = { Store.selection = zoom.children.mapTo(HashSet()) { it.id } })
+            } else {
+                SearchBar(
+                    state = query,
+                    focusRequester = searchFocus,
+                    showBack = searching || zoom !== Store.root,
+                    backLabel = if (searching) "Close search" else "Back",
+                    onBack = { if (searching) closeSearch() else Store.zoomOut() },
+                    onSubmit = { results.firstOrNull()?.let(open) },
+                ) {
+                    MoreMenu(
+                        onSelect = {
+                            focusManager.clearFocus()
+                            Store.selection = emptySet()
+                        },
+                        onShareTarget = { askTarget = true },
+                        onCopyAll = { Actions.copy(ctx, TextFormat.export(Store.root)) },
+                        onPasteAll = { importing = TextFormat.parse(Actions.clipboardText(ctx)) },
+                        onExport = { exportFile.launch("twig-${LocalDate.now()}.md") },
+                        onImport = { importFile.launch(arrayOf("text/*")) },
+                    )
+                }
             }
             Box(Modifier.weight(1f)) {
-                if (searching) {
-                    SearchResults(q, results, open)
-                } else {
-                    Outline(zoom, listState, PaddingValues(top = 2.dp, bottom = 8.dp), onMoveTo = { moveTarget = it })
-                }
+                if (searching) SearchResults(q, results, open)
+                else Page(zoom, listState, onMove = { moving = it })
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter)) { data -> SwipeableSnackbar(data) }
             }
-            if (imeVisible && !searching && Store.focusedId != null) EditToolbar(onMoveTo = { moveTarget = it })
+            if (selection != null) BatchBar(zoom.children.filter { it.id in selection }, onMove = { moving = it })
         }
     }
 
-    moveTarget?.let { n ->
-        val wasEditing = Store.focusedId == n.id
-        MoveDialog(n, onDismiss = { moveTarget = null }) { dest, atEnd ->
-            moveTarget = null
-            Store.moveInto(n, dest, atEnd)
-            // Once the dialog window is gone: keep editing the item if it's still on screen.
-            Store.main.postDelayed({
-                val visible = Store.flatten(Store.zoom).any { it.node === n }
-                if (wasEditing && visible) Store.focusReq = FocusReq(n.id, n.text.text.length)
-                else if (wasEditing) focusManager.clearFocus()
-                if (visible) Store.highlightId = n.id
-            }, 150)
+    moving?.let { nodes ->
+        MoveDialog(nodes, onDismiss = { moving = null }) { dest ->
+            moving = null
+            if (Store.move(nodes, dest)) Store.selection = null
         }
     }
-}
-
-private suspend fun write(ctx: Context, uri: Uri, data: String, done: String) {
-    val ok = withContext(Dispatchers.IO) {
-        runCatching { ctx.contentResolver.openOutputStream(uri, "wt")!!.use { it.write(data.toByteArray()) } }.isSuccess
+    importing?.let { items ->
+        ImportDialog(items.size, onDismiss = { importing = null }) {
+            importing = null
+            Store.replaceAll(items)
+        }
     }
-    Store.notify(if (ok) done else "Couldn't write the file")
+    if (askTarget) ShareTargetDialog { askTarget = false }
 }
 
-/** The only bar at the top: search field, with zoom-out on the left and the menu on the right. */
+/** The only bar at the top: search field, with Back on the left and the menu on the right. */
 @Composable
 private fun SearchBar(
     state: TextFieldState,
@@ -321,42 +280,84 @@ private fun SearchBar(
 }
 
 @Composable
-private fun MoreMenu(zoom: Node, onExportJson: () -> Unit, onExportMd: () -> Unit, onImport: () -> Unit) {
-    var menu by remember { mutableStateOf(false) }
+private fun MoreMenu(
+    onSelect: () -> Unit,
+    onShareTarget: () -> Unit,
+    onCopyAll: () -> Unit,
+    onPasteAll: () -> Unit,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    fun item(f: () -> Unit): () -> Unit = {
+        open = false
+        f()
+    }
     Box {
-        IconButton(onClick = { menu = true }, modifier = Modifier.testTag("more")) { Icon(Ic.More, "More") }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(
-                text = { Text("Hide completed") },
-                leadingIcon = { Icon(Ic.Fold, null, Modifier.size(20.dp)) },
-                trailingIcon = { if (Store.hideCompleted) Icon(Ic.Check, "On", Modifier.size(20.dp)) },
-                onClick = {
-                    Store.hideCompleted = !Store.hideCompleted
-                    menu = false
-                },
-            )
-            MenuItem("Expand all", Ic.Unfold) {
-                Store.setCollapsedBelow(zoom, false)
-                menu = false
-            }
-            MenuItem("Collapse all", Ic.Fold) {
-                Store.setCollapsedBelow(zoom, true)
-                menu = false
-            }
+        IconButton(onClick = { open = true }, modifier = Modifier.testTag("more")) { Icon(Ic.More, "More") }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            MenuItem("Select", Ic.CheckCircle, item(onSelect))
+            MenuItem("Save shared items to…", Ic.Inbox, item(onShareTarget))
             HorizontalDivider()
-            MenuItem("Back up everything (.zip)", Ic.Down) {
-                menu = false
-                onExportJson()
-            }
-            MenuItem(if (zoom === Store.root) "Export as Markdown" else "Export this as Markdown", Ic.Share) {
-                menu = false
-                onExportMd()
-            }
-            MenuItem("Import (backup, OPML, Markdown)", Ic.Up) {
-                menu = false
-                onImport()
+            MenuItem("Copy all as text", Ic.Copy, item(onCopyAll))
+            MenuItem("Replace all from clipboard", Ic.Paste, item(onPasteAll))
+            MenuItem("Export to file", Ic.Down, item(onExport))
+            MenuItem("Replace all from file", Ic.Up, item(onImport))
+        }
+    }
+}
+
+/** Batch mode's top bar. */
+@Composable
+private fun SelectionBar(count: Int, all: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
+            .height(52.dp)
+            .testTag("selectionBar"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = { Store.selection = null }) { Icon(Ic.Close, "Stop selecting") }
+        Text("$count selected", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).padding(start = 4.dp))
+        TextButton(onClick = all) { Text("All") }
+        TextButton(onClick = { Store.selection = emptySet() }) { Text("None") }
+    }
+}
+
+/** Batch mode's actions, for [nodes] (the selected bullets, in page order). */
+@Composable
+private fun BatchBar(nodes: List<Node>, onMove: (List<Node>) -> Unit) {
+    val on = nodes.isNotEmpty()
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+        Row(Modifier.fillMaxWidth().height(64.dp).testTag("batchBar"), horizontalArrangement = Arrangement.SpaceEvenly) {
+            BatchAction(Ic.Check, "Done", on) { Store.setDone(nodes, true) }
+            BatchAction(Ic.Undo, "Undone", on) { Store.setDone(nodes, false) }
+            BatchAction(Ic.Move, "Move", on) { onMove(nodes) }
+            BatchAction(Ic.Delete, "Delete", on) {
+                Store.selection = null
+                Store.delete(nodes)
             }
         }
+    }
+}
+
+@Composable
+private fun BatchAction(icon: ImageVector, label: String, enabled: Boolean, onClick: () -> Unit) {
+    val ink = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.38f)
+    Column(
+        Modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp)
+            .testTag("batch-$label"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, null, Modifier.size(22.dp), tint = ink)
+        Text(label, style = MaterialTheme.typography.labelMedium, color = ink)
     }
 }
 
@@ -391,55 +392,7 @@ private fun SwipeableSnackbar(data: SnackbarData) {
 }
 
 @Composable
-private fun EditToolbar(onMoveTo: (Node) -> Unit) {
-    val id = Store.focusedId ?: return
-    val node = Store.node(id) ?: return
-    val structural = node !== Store.zoom
-    val focus = LocalFocusManager.current
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(Modifier.fillMaxWidth().height(48.dp).testTag("toolbar"), verticalAlignment = Alignment.CenterVertically) {
-        Row(
-            Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(start = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Tool(Ic.Outdent, "Outdent", structural) { Store.outdent(node) }
-            Tool(Ic.Indent, "Indent", structural) { Store.indent(node) }
-            Tool(Ic.Move, "Move to…", structural) { onMoveTo(node) }
-            Tool(if (node.done) Ic.Undo else Ic.Check, if (node.done) "Mark not completed" else "Mark completed") { Store.toggleDone(node) }
-            Tool(Ic.Up, "Move up", structural) { Store.moveBy(node, -1) }
-            Tool(Ic.Down, "Move down", structural) { Store.moveBy(node, 1) }
-            Tool(Ic.Delete, "Delete", structural) {
-                val rows = Store.flatten(Store.zoom)
-                val i = rows.indexOfFirst { it.node === node }
-                var j = i + 1
-                while (i >= 0 && j < rows.size && rows[j].depth > rows[i].depth) j++
-                val neighbor = rows.getOrNull(i - 1)?.node ?: rows.getOrNull(j)?.node
-                if (neighbor != null) {
-                    val end = neighbor.text.text.length
-                    neighbor.text.edit { selection = TextRange(end) }
-                    Store.focusRequesters[neighbor.id]?.let { runCatching { it.requestFocus() } }
-                } else {
-                    focus.clearFocus()
-                }
-                Store.delete(node)
-            }
-        }
-            Tool(Ic.KeyboardHide, "Hide keyboard") { focus.clearFocus() }
-            Spacer(Modifier.width(4.dp))
-        }
-    }
-}
-
-@Composable
-private fun Tool(icon: ImageVector, desc: String, enabled: Boolean = true, onClick: () -> Unit) {
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(44.dp).testTag("tool-$desc")) {
-        Icon(icon, desc, Modifier.size(22.dp))
-    }
-}
-
-@Composable
-private fun MoveDialog(node: Node, onDismiss: () -> Unit, onPick: (dest: Node, atEnd: Boolean) -> Unit) {
-    var atEnd by remember { mutableStateOf(Store.meta("moveAtEnd") == "1") }
+private fun MoveDialog(nodes: List<Node>, onDismiss: () -> Unit, onPick: (Node) -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             shape = RoundedCornerShape(24.dp),
@@ -447,52 +400,85 @@ private fun MoveDialog(node: Node, onDismiss: () -> Unit, onPick: (dest: Node, a
             modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.8f).imePadding(),
         ) {
             Column(Modifier.padding(top = 18.dp)) {
-                Row(Modifier.padding(start = 20.dp, end = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Move “${Store.label(node).take(40)}”",
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    // where in the destination it lands; remembered
-                    PlaceToggle(atEnd) {
-                        atEnd = it
-                        Store.setMeta("moveAtEnd", if (it) "1" else "0")
+                Text(
+                    if (nodes.size == 1) "Move “${Store.label(nodes[0]).take(40)}”" else "Move ${nodes.size} bullets",
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 10.dp),
+                )
+                DestinationPicker(nodes, onPick, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** "Always ask" shows the share sheet; a top-level bullet takes shares without asking. */
+@Composable
+private fun ShareTargetDialog(onDismiss: () -> Unit) {
+    val current = Store.shareTarget
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+            Column(Modifier.padding(vertical = 18.dp)) {
+                Text(
+                    "Save shared items to",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                )
+                LazyColumn(Modifier.heightIn(max = 480.dp), contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    item {
+                        Choice("Always ask", current == null, "target-ask") {
+                            Store.shareTarget = null
+                            onDismiss()
+                        }
+                    }
+                    items(Store.root.children, key = { it.id }) { n ->
+                        Choice(Store.label(n), current === n, "target-${n.id}") {
+                            Store.shareTarget = n
+                            onDismiss()
+                        }
                     }
                 }
-                DestinationPicker(
-                    exclude = node,
-                    onPick = { onPick(it, atEnd) },
-                    modifier = Modifier.weight(1f),
-                    autoFocus = true,
-                    moving = node,
-                )
             }
         }
     }
 }
 
 @Composable
-private fun PlaceToggle(atEnd: Boolean, onChange: (Boolean) -> Unit) {
-    val cs = MaterialTheme.colorScheme
+private fun Choice(label: String, on: Boolean, tag: String, onClick: () -> Unit) {
     Row(
-        Modifier.clip(RoundedCornerShape(10.dp)).background(cs.surfaceContainerHighest).padding(2.dp),
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(end = 16.dp)
+            .testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        for ((label, end) in listOf("Top" to false, "Bottom" to true)) {
-            val on = atEnd == end
-            Text(
-                label,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (on) cs.onPrimary else cs.onSurfaceVariant,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (on) cs.primary else cs.surfaceContainerHighest)
-                    .clickable { onChange(end) }
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                    .testTag("place-$label"),
-            )
-        }
+        RadioButton(selected = on, onClick = null, modifier = Modifier.padding(12.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
+}
+
+/** Import replaces everything, so it asks first. */
+@Composable
+private fun ImportDialog(count: Int, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (count == 0) "Nothing to import" else "Replace everything?") },
+        text = {
+            Text(
+                if (count == 0) "There's no text to turn into bullets."
+                else "This deletes all ${Store.size} bullets in Twig and puts in the $count from the text. It can't be undone."
+            )
+        },
+        confirmButton = {
+            if (count == 0) {
+                TextButton(onClick = onDismiss) { Text("OK") }
+            } else {
+                TextButton(onClick = onConfirm, modifier = Modifier.testTag("confirmImport")) { Text("Replace") }
+            }
+        },
+        dismissButton = { if (count > 0) TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

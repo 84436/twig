@@ -24,7 +24,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.twig.data.Node
 import app.twig.data.Store
-import app.twig.share.LinkInfo
 
 /** Live results under the search bar; replaces the outline while there is a query. */
 @Composable
@@ -47,7 +46,7 @@ fun SearchResults(query: String, results: List<Node>, onOpen: (Node) -> Unit) {
 @Composable
 private fun SearchResult(n: Node, terms: List<String>, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val text = n.plain.ifEmpty { n.url?.let { LinkInfo.display(it) } ?: "" }
+    val text = n.plain.ifEmpty { n.url.orEmpty() }
     val accent = cs.primary
     val annotated = remember(text, terms, accent) { highlight(text, terms, accent) }
     Column(
@@ -64,11 +63,8 @@ private fun SearchResult(n: Node, terms: List<String>, onClick: () -> Unit) {
             color = if (n.done) cs.onSurface.copy(alpha = 0.5f) else cs.onSurface,
             textDecoration = if (n.done) TextDecoration.LineThrough else null,
         )
-        val sub = buildString {
-            append(Store.pathLabel(n))
-            n.url?.takeIf { it.isNotBlank() }?.let { append("  ·  ").append(LinkInfo.display(it)) }
-        }
-        Text(sub, style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(Store.pathLabel(n), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        n.url?.let { LinkLabel(it, Modifier.padding(top = 2.dp)) }
     }
 }
 

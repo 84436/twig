@@ -9,7 +9,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.TextRange
 import app.twig.share.LinkInfo
@@ -19,18 +18,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
-/** A snackbar message, optionally with an action (e.g. Undo). */
-class Notice(val message: String, val actionLabel: String? = null, val action: (() -> Unit)? = null)
+/** The snackbar. Only removals and moves show one, always with Undo. */
+class Notice(val message: String, val undo: () -> Unit)
 
-const val FIELD_TEXT = 0
-const val FIELD_URL = 1
-
-/** A request to put the cursor in a row. Plain class on purpose: every request is distinct. */
-class FocusReq(val nodeId: Long, val cursor: Int, val field: Int = FIELD_TEXT)
+/** A request to put the cursor in a bullet. Plain class on purpose: every request is distinct. */
+class FocusReq(val nodeId: Long, val cursor: Int)
 
 /**
  * The whole outline, in memory. Everything here runs on the main thread except the
@@ -38,12 +33,11 @@ class FocusReq(val nodeId: Long, val cursor: Int, val field: Int = FIELD_TEXT)
  */
 object Store {
     const val ROOT_ID = 0L
-    private const val TAG = "Twig"
 
     lateinit var appContext: Context
         private set
     private lateinit var db: Db
-    private val writer: ExecutorService = Executors.newSingleThreadExecutor { r -> Thread(r, "twig-db") }
+    private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "twig-db") }
 
     @Volatile private var loadLatch = CountDownLatch(1)
     @Volatile private var loadError: Throwable? = null
@@ -52,40 +46,38 @@ object Store {
         private set
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    var root: Node = newRoot()
+    var root = newRoot()
         private set
     private val byId = HashMap<Long, Node>()
     private var nextId = 1L
     private val meta = HashMap<String, String>()
 
-    /** Bumped on every structural change; the outline re-flattens when it changes. */
+    /** Bumped on every structural change; pages re-read their children when it changes. */
     var version by mutableIntStateOf(0)
         private set
 
     private var zoomState by mutableStateOf(root)
+    /** The list on screen. */
     var zoom: Node
         get() = zoomState
         set(v) {
             if (zoomState === v) return
             zoomState = v
+            selection = null
+            revealedId = null
             setMeta("zoom", v.id.toString())
-        }
-
-    private var hideState by mutableStateOf(false)
-    var hideCompleted: Boolean
-        get() = hideState
-        set(v) {
-            hideState = v
-            setMeta("hideCompleted", if (v) "1" else "0")
-            bump()
         }
 
     var focusReq by mutableStateOf<FocusReq?>(null)
     var focusedId by mutableStateOf<Long?>(null)
     var highlightId by mutableStateOf<Long?>(null)
     var notice by mutableStateOf<Notice?>(null)
+    /** Batch mode: ids of the selected bullets on this page, or null when not selecting. */
+    var selection by mutableStateOf<Set<Long>?>(null)
+    /** The bullet whose Delete button is showing. */
+    var revealedId by mutableStateOf<Long?>(null)
     val focusRequesters = HashMap<Long, FocusRequester>()
-    /** Scroll position per zoom level (index, offset), so zooming out lands where you were. */
+    /** Scroll position per list (index, offset), so going back lands where you were. */
     val scrollMemory = HashMap<Long, Pair<Int, Int>>()
 
     private val pendingUpserts = LinkedHashMap<Long, Node>()
@@ -97,12 +89,12 @@ object Store {
         flush()
     }
 
-    private fun newRoot() = Node(ROOT_ID, null, 0.0, "", null, null, KIND_BULLET, false, false, 0, 0, null)
+    private fun newRoot() = Node(ROOT_ID, null, 0.0, "", null, false)
 
     // ---------------------------------------------------------------- lifecycle
 
     /** Starts loading on a background thread. Call [awaitLoaded] before touching the tree. */
-    fun init(ctx: Context, dbName: String? = "twig.db") {
+    fun init(ctx: Context, dbName: String? = "twig4.db") {
         appContext = ctx.applicationContext
         main = Handler(Looper.getMainLooper())
         db = Db(appContext, dbName)
@@ -118,6 +110,8 @@ object Store {
         focusedId = null
         highlightId = null
         notice = null
+        selection = null
+        revealedId = null
         flushScheduled = false
         thread(name = "twig-load", priority = Thread.MAX_PRIORITY) {
             try {
@@ -137,61 +131,24 @@ object Store {
 
     private fun load() {
         val rows = db.loadAll()
-        val m = db.loadMeta()
         val r = newRoot()
         val map = HashMap<Long, Node>(rows.size * 2 + 16)
-        var maxId = 0L
-        for (row in rows) {
-            map[row.id] = Node(
-                row.id, null, row.rank, row.text, row.url?.takeIf { it.isNotBlank() }, row.note, row.kind,
-                row.done, row.collapsed, row.created, row.modified, row.attach,
-            )
-            if (row.id > maxId) maxId = row.id
-        }
+        for (row in rows) map[row.id] = Node(row.id, null, row.rank, row.text, row.url, row.done)
         for (row in rows) {
             val n = map.getValue(row.id)
             val p = map[row.parent]?.takeIf { it !== n } ?: r
             n.parent = p
             p.children.add(n)
         }
-        // Anything not reachable from the root (a parent cycle) goes back to the top level.
-        val reachable = HashSet<Long>(map.size * 2 + 16)
-        fun mark(from: Node) {
-            val stack = ArrayList<Node>()
-            stack.add(from)
-            while (stack.isNotEmpty()) {
-                val x = stack.removeAt(stack.size - 1)
-                for (c in x.children) if (reachable.add(c.id)) stack.add(c)
-            }
-        }
-        mark(r)
-        if (reachable.size < map.size) {
-            for (n in map.values) {
-                if (n.id in reachable) continue
-                n.parent?.children?.remove(n)
-                n.parent = r
-                r.children.add(n)
-                reachable.add(n.id)
-                mark(n)
-            }
-        }
         r.children.sortBy { it.rank }
-        for (n in map.values) if (n.children.size > 1) n.children.sortBy { it.rank }
-
+        for (n in map.values) n.children.sortBy { it.rank }
         root = r
         byId.clear()
         byId.putAll(map)
-        nextId = maxId + 1
+        nextId = (map.keys.maxOrNull() ?: 0L) + 1
         meta.clear()
-        meta.putAll(m)
-        hideState = m["hideCompleted"] == "1"
-        zoomState = m["zoom"]?.toLongOrNull()?.let { map[it] } ?: r
-
-        try {
-            Attachments.cleanup(appContext, map.values.mapNotNullTo(HashSet()) { it.attach })
-        } catch (t: Throwable) {
-            Log.w(TAG, "attachment cleanup failed", t)
-        }
+        meta.putAll(db.loadMeta())
+        zoomState = meta["zoom"]?.toLongOrNull()?.let { map[it] } ?: r
     }
 
     // ---------------------------------------------------------------- persistence
@@ -201,12 +158,6 @@ object Store {
         pendingDeletes.remove(n.id)
         pendingUpserts[n.id] = n
         scheduleFlush()
-    }
-
-    /** User edited the text of [n]. */
-    fun touched(n: Node) {
-        n.modified = System.currentTimeMillis()
-        dirty(n)
     }
 
     private fun markDeleted(ids: Collection<Long>) {
@@ -238,7 +189,7 @@ object Store {
             flushScheduled = false
         }
         if (pendingUpserts.isEmpty() && pendingDeletes.isEmpty() && pendingMeta.isEmpty()) return
-        val ups = pendingUpserts.values.map { it.toRow() }
+        val ups = pendingUpserts.values.map { NodeRow(it.id, it.parent?.id ?: ROOT_ID, it.rank, it.plain, it.url, it.done) }
         val dels = pendingDeletes.toList()
         val m = HashMap(pendingMeta)
         pendingUpserts.clear()
@@ -249,12 +200,12 @@ object Store {
             try {
                 target.write(ups, dels, m)
             } catch (t: Throwable) {
-                Log.e(TAG, "write failed", t)
+                Log.e("Twig", "write failed", t)
             }
         }
     }
 
-    /** For tests and backups: flush and wait for the writer. */
+    /** For tests: flush and wait for the writer. */
     fun flushBlocking() {
         flush()
         writer.submit {}.get()
@@ -267,76 +218,69 @@ object Store {
     val size: Int get() = byId.size
     fun allNodes(): Collection<Node> = byId.values
 
-    private fun visible(n: Node) = !(hideState && n.done)
-
-    fun label(n: Node): String {
-        if (n === root) return "Home"
-        val first = n.plain.lineSequence().firstOrNull()?.trim().orEmpty()
-        return first.take(60).ifEmpty { n.url ?: if (n.attach != null) "Image" else "Untitled" }
-    }
-
-    fun path(n: Node): List<Node> {
-        val out = ArrayList<Node>()
+    /** Home is 0, its bullets 1, and so on down to [MAX_DEPTH]. */
+    fun depth(n: Node): Int {
+        var d = 0
         var p = n.parent
-        while (p != null && p !== root) {
-            out.add(p)
+        while (p != null) {
+            d++
             p = p.parent
         }
-        out.reverse()
-        return out
+        return d
     }
 
-    fun pathLabel(n: Node): String = (listOf("Home") + path(n).map { label(it) }).joinToString(" › ")
+    private fun height(n: Node): Int = if (n.children.isEmpty()) 0 else 1 + n.children.maxOf { height(it) }
 
-    /** The visible outline under [zoom], depth-first. */
-    fun flatten(zoom: Node): List<FlatRow> = Snapshot.withoutReadObservation {
-        val out = ArrayList<FlatRow>(64)
-        val hide = hideState
-        fun visit(p: Node, d: Int) {
-            for (c in p.children) {
-                if (hide && c.done) continue
-                val kids = if (hide) c.children.any { !it.done } else c.children.isNotEmpty()
-                out.add(FlatRow(c, d, kids))
-                if (kids && !c.collapsed) visit(c, d + 1)
-            }
+    /** Whether [nodes] can all go inside [dest]: not into themselves, and no deeper than [MAX_DEPTH]. */
+    fun canHold(dest: Node, nodes: Collection<Node>): Boolean =
+        isAlive(dest) && nodes.none { it === dest || it.isAncestorOf(dest) } &&
+            depth(dest) + 1 + (nodes.maxOfOrNull { height(it) } ?: 0) <= MAX_DEPTH
+
+    fun label(n: Node): String =
+        if (n === root) "Home" else n.plain.lineSequence().first().trim().take(60).ifEmpty { n.url ?: "Untitled" }
+
+    /** "Home › Groceries": where [n] lives. */
+    fun pathLabel(n: Node): String {
+        val parts = ArrayList<String>()
+        var p = n.parent
+        while (p != null) {
+            parts.add(label(p))
+            p = p.parent
         }
-        visit(zoom, 0)
-        out
+        return parts.asReversed().joinToString(" › ")
     }
 
-    /** All terms must match (text, URL or note). Best matches first, then most recent. */
-    fun search(query: String, limit: Int = 300, preferParents: Boolean = false): List<Node> {
+    /** All terms must match (text or URL). Best matches first, then outline order. */
+    fun search(query: String, limit: Int = 300): List<Node> {
         val terms = query.trim().split(' ', '\t', '\n').filter { it.isNotEmpty() }
         if (terms.isEmpty()) return emptyList()
         val hits = ArrayList<Pair<Node, Int>>()
-        for (n in byId.values) {
-            val t = n.text.text
-            var score = 0
-            var ok = true
-            for (term in terms) {
-                val i = t.indexOf(term, ignoreCase = true)
-                if (i >= 0) {
-                    score += when {
-                        i == 0 -> 0
-                        !t[i - 1].isLetterOrDigit() -> 1
-                        else -> 2
-                    }
-                } else if (n.url?.contains(term, true) == true || n.note?.contains(term, true) == true) {
-                    score += 3
-                } else {
-                    ok = false
-                    break
-                }
+        fun visit(p: Node) {
+            for (n in p.children) {
+                score(n, terms)?.let { hits.add(n to it) }
+                visit(n)
             }
-            if (ok) hits.add(n to score)
         }
-        val byScore = compareBy<Pair<Node, Int>> { it.second }
-        val order = if (preferParents) byScore.thenByDescending { it.first.children.isNotEmpty() } else byScore
-        hits.sortWith(order.thenByDescending { it.first.modified })
+        visit(root)
+        hits.sortBy { it.second }
         return hits.asSequence().take(limit).map { it.first }.toList()
     }
 
-    fun findByUrl(url: String): Node? = byId.values.firstOrNull { it.url == url }
+    private fun score(n: Node, terms: List<String>): Int? {
+        val t = n.text.text
+        var s = 0
+        for (term in terms) {
+            val i = t.indexOf(term, ignoreCase = true)
+            s += when {
+                i == 0 -> 0
+                i > 0 && !t[i - 1].isLetterOrDigit() -> 1
+                i > 0 -> 2
+                n.url?.contains(term, ignoreCase = true) == true -> 3
+                else -> return null
+            }
+        }
+        return s
+    }
 
     // ---------------------------------------------------------------- structure helpers
 
@@ -353,19 +297,14 @@ object Store {
             after == null -> before + 1.0
             else -> before + (after - before) / 2
         }
-        val ok = (before == null || r > before) && (after == null || r < after)
-        if (!ok) {
-            renumber(parent)
+        if ((before != null && r <= before) || (after != null && r >= after)) {
+            parent.children.forEachIndexed { i, c ->
+                c.rank = (i + 1).toDouble()
+                dirty(c)
+            }
             return rankAt(parent, index)
         }
         return r
-    }
-
-    private fun renumber(parent: Node) {
-        parent.children.forEachIndexed { i, c ->
-            c.rank = (i + 1).toDouble()
-            dirty(c)
-        }
     }
 
     private fun place(n: Node, parent: Node, index: Int) {
@@ -376,16 +315,12 @@ object Store {
         dirty(n)
     }
 
-    private fun detach(n: Node): Int {
-        val p = n.parent ?: return -1
-        val i = p.children.indexOf(n)
-        if (i >= 0) p.children.removeAt(i)
-        return i
+    private fun detach(n: Node) {
+        n.parent?.children?.remove(n)
     }
 
     private inline fun walk(n: Node, f: (Node) -> Unit) {
-        val stack = ArrayList<Node>()
-        stack.add(n)
+        val stack = arrayListOf(n)
         while (stack.isNotEmpty()) {
             val x = stack.removeAt(stack.size - 1)
             f(x)
@@ -393,301 +328,160 @@ object Store {
         }
     }
 
+    /** Where each of [nodes] is now, in an order that puts them back right on Undo. */
+    private fun spots(nodes: List<Node>) =
+        nodes.map { Triple(it, it.parent!!, it.parent!!.children.indexOf(it)) }.sortedBy { it.third }
+
     // ---------------------------------------------------------------- edits
 
-    fun create(
-        parent: Node,
-        index: Int,
-        text: String = "",
-        url: String? = null,
-        note: String? = null,
-        attach: String? = null,
-    ): Node {
-        val t = System.currentTimeMillis()
-        val n = Node(nextId++, null, 0.0, text, url, note, KIND_BULLET, false, false, t, t, attach)
+    fun create(parent: Node, index: Int, text: String = "", url: String? = null, done: Boolean = false): Node {
+        val n = Node(nextId++, null, 0.0, text, url, done)
         byId[n.id] = n
         place(n, parent, index)
         bump()
         return n
     }
 
-    fun indent(n: Node): Boolean {
+    /** Drag & drop: [n] goes to [index] among its siblings. */
+    fun reorder(n: Node, index: Int): Boolean {
         val p = n.parent ?: return false
-        val i = p.children.indexOf(n)
-        var newParent: Node? = null
-        for (j in i - 1 downTo 0) {
-            if (visible(p.children[j])) {
-                newParent = p.children[j]
-                break
+        if (p.children.indexOf(n) == index) return false
+        detach(n)
+        place(n, p, index)
+        bump()
+        return true
+    }
+
+    /** "Move to…": [nodes] go to the end of [dest], keeping their order. Undoable. */
+    fun move(nodes: List<Node>, dest: Node): Boolean {
+        val list = nodes.filter { it !== root && isAlive(it) }
+        if (list.isEmpty() || !canHold(dest, list)) return false
+        val undo = spots(list)
+        for (n in list) {
+            detach(n)
+            place(n, dest, dest.children.size)
+        }
+        bump()
+        notice = Notice(if (list.size == 1) "Moved to ${label(dest)}" else "Moved ${list.size} to ${label(dest)}") {
+            for ((n, p, i) in undo) {
+                if (isAlive(n) && isAlive(p)) {
+                    detach(n)
+                    place(n, p, i)
+                }
             }
-        }
-        if (newParent == null) return false
-        detach(n)
-        place(n, newParent, newParent.children.size)
-        if (newParent.collapsed) {
-            newParent.collapsed = false
-            dirty(newParent)
-        }
-        bump()
-        return true
-    }
-
-    fun outdent(n: Node): Boolean {
-        val p = n.parent ?: return false
-        if (p === zoomState || p === root) return false
-        val gp = p.parent ?: return false
-        detach(n)
-        place(n, gp, gp.children.indexOf(p) + 1)
-        bump()
-        return true
-    }
-
-    /** Swap with the previous (-1) or next (+1) visible sibling. */
-    fun moveBy(n: Node, delta: Int): Boolean {
-        val p = n.parent ?: return false
-        val sibs = p.children
-        var j = sibs.indexOf(n) + delta
-        while (j in sibs.indices && !visible(sibs[j])) j += delta
-        if (j !in sibs.indices) return false
-        detach(n)
-        place(n, p, j)
-        bump()
-        return true
-    }
-
-    /** Drop target from drag & drop: [n] goes under [parent], right after [after] (or first). */
-    fun moveTo(n: Node, parent: Node, after: Node?): Boolean {
-        if (n === parent || n.isAncestorOf(parent)) return false
-        if (after != null && (after.parent !== parent || after === n)) return false
-        if (n.parent === parent) {
-            val i = parent.children.indexOf(n)
-            if (after == null && i == 0) return false
-            if (after != null && i > 0 && parent.children[i - 1] === after) return false
-        }
-        detach(n)
-        val idx = if (after == null) 0 else parent.children.indexOf(after) + 1
-        place(n, parent, idx)
-        bump()
-        return true
-    }
-
-    /** "Move to…": becomes the first child of [dest]. Undoable. */
-    fun moveInto(n: Node, dest: Node, atEnd: Boolean = false): Boolean {
-        if (n === dest || n.isAncestorOf(dest)) return false
-        if (n.parent === dest && (if (atEnd) dest.children.lastOrNull() else dest.children.firstOrNull()) === n) return false
-        val oldParent = n.parent ?: return false
-        val oldIndex = detach(n)
-        place(n, dest, if (atEnd) dest.children.size else 0)
-        pushRecent(dest)
-        bump()
-        notice = Notice("Moved to ${label(dest)}", "Undo") {
-            if (isAlive(n) && isAlive(oldParent)) {
-                detach(n)
-                place(n, oldParent, oldIndex)
-                bump()
-            }
+            bump()
         }
         return true
     }
 
-    fun delete(n: Node, undoable: Boolean = true) {
-        if (n === root) return
-        val p = n.parent ?: return
-        if (!isAlive(n)) return
-        val zoomed = zoomState === n || n.isAncestorOf(zoomState)
-        val idx = detach(n)
+    fun delete(nodes: List<Node>, undoable: Boolean = true) {
+        val list = nodes.filter { it !== root && isAlive(it) }
+        if (list.isEmpty()) return
+        val undo = spots(list)
         val ids = ArrayList<Long>()
-        walk(n) {
-            ids.add(it.id)
-            byId.remove(it.id)
-            focusRequesters.remove(it.id)
+        for (n in list) {
+            detach(n)
+            walk(n) {
+                ids.add(it.id)
+                byId.remove(it.id)
+                focusRequesters.remove(it.id)
+            }
         }
         markDeleted(ids)
-        if (zoomed) zoom = p
+        var z = zoomState
+        while (!isAlive(z)) z = z.parent ?: root
+        zoom = z
         if (focusedId in ids) focusedId = null
+        revealedId = null
         bump()
-        if (undoable) {
-            val what = label(n)
-            notice = Notice("Deleted “${what.take(32)}”" + if (ids.size > 1) " (+${ids.size - 1})" else "", "Undo") {
-                restore(n, p, idx)
-            }
+        if (!undoable) return
+        notice = Notice(if (list.size == 1) "Deleted “${label(list[0]).take(32)}”" else "Deleted ${list.size} bullets") {
+            for ((n, p, i) in undo) restore(n, p, i)
         }
     }
 
-    private fun restore(n: Node, p: Node, idx: Int) {
+    private fun restore(n: Node, p: Node, index: Int) {
         if (byId.containsKey(n.id)) return
-        val parent = if (isAlive(p)) p else root
         walk(n) {
             byId[it.id] = it
             dirty(it)
         }
-        place(n, parent, idx)
+        place(n, if (isAlive(p)) p else root, index)
         bump()
     }
 
-    fun toggleDone(n: Node) {
-        n.done = !n.done
-        n.modified = System.currentTimeMillis()
-        dirty(n)
-        if (!hideState) return
-        if (n.done) {
-            main.postDelayed({ bump() }, 700)
-            notice = Notice("Completed “${label(n).take(32)}”", "Undo") {
-                if (isAlive(n) && n.done) toggleDone(n)
-            }
-        } else {
-            bump()
+    fun setDone(nodes: Collection<Node>, done: Boolean) {
+        for (n in nodes) {
+            if (n.done == done) continue
+            n.done = done
+            dirty(n)
         }
     }
 
-    fun toggleCollapsed(n: Node) {
-        n.collapsed = !n.collapsed
-        dirty(n)
-        bump()
-    }
-
-    fun setCollapsedBelow(top: Node, collapsed: Boolean) {
-        for (c in top.children) {
-            walk(c) {
-                if (it.children.isNotEmpty() && it.collapsed != collapsed) {
-                    it.collapsed = collapsed
-                    dirty(it)
-                }
-            }
-        }
-        bump()
-    }
+    fun toggleDone(n: Node) = setDone(listOf(n), !n.done)
 
     /**
      * The user typed or pasted line breaks into [n]. [parts] is the inserted text split on '\n'
      * (so at least two parts); [before]/[after] are the untouched text around it.
+     * The new lines become bullets right after [n].
      */
     fun onEnter(n: Node, before: String, parts: List<String>, after: String) {
-        if (!isAlive(n) || parts.size < 2) return
-        val plainEnter = parts.size == 2 && parts[0].isEmpty() && parts[1].isEmpty()
-        if (plainEnter) {
-            if (before.isEmpty() && after.isEmpty()) {
-                if (outdent(n)) return // Enter on an empty nested item steps out a level
-            } else if (before.isEmpty()) {
-                val p = n.parent ?: return
-                create(p, p.children.indexOf(n)) // blank line above, cursor stays
-                return
-            }
+        val p = n.parent
+        if (!isAlive(n) || p == null || parts.size < 2) return
+        if (parts.size == 2 && parts.all { it.isEmpty() } && before.isEmpty()) {
+            create(p, p.children.indexOf(n)) // Enter at the start: blank bullet above, cursor stays
+            return
         }
-        val lines = parts.drop(1).toMutableList()
-        lines[lines.size - 1] = lines.last() + after
         n.text.setTextAndPlaceCursorAtEnd(before + parts.first())
-        touched(n)
-
-        val asChild = !n.collapsed && n.children.any { visible(it) }
-        val parent: Node
-        var index: Int
-        if (asChild) {
-            parent = n
-            index = 0
-        } else {
-            parent = n.parent ?: root
-            index = parent.children.indexOf(n) + 1
-        }
-        var last = n
-        for (line in lines) last = create(parent, index++, line)
-        focusReq = FocusReq(last.id, parts.last().length)
+        dirty(n)
+        addLines(p, p.children.indexOf(n) + 1, parts, after)
     }
 
-    /** Enter in the title of the zoomed item: new first children. */
+    /** Enter in a list's title: the new lines become its first bullets. */
     fun onHeaderEnter(z: Node, before: String, parts: List<String>, after: String) {
         if (!isAlive(z) || parts.size < 2) return
         z.text.setTextAndPlaceCursorAtEnd(before + parts.first())
-        touched(z)
+        dirty(z)
+        addLines(z, 0, parts, after)
+    }
+
+    private fun addLines(parent: Node, index: Int, parts: List<String>, after: String) {
         val lines = parts.drop(1).toMutableList()
-        lines[lines.size - 1] = lines.last() + after
+        lines[lines.lastIndex] += after
+        var i = index
         var last: Node? = null
-        lines.forEachIndexed { i, l -> last = create(z, i, l) }
+        for (line in lines) last = create(parent, i++, line)
         last?.let { focusReq = FocusReq(it.id, parts.last().length) }
     }
 
-    /** Backspace in an empty item: delete it and continue at the end of [prev]. */
+    /** Backspace in an empty bullet: delete it and continue at the end of [prev]. */
     fun backspaceEmpty(n: Node, prev: Node?): Boolean {
-        if (n.text.text.isNotEmpty() || n.children.isNotEmpty() || n.attach != null || !n.url.isNullOrBlank()) return false
-        val target = prev ?: return false
-        val end = target.text.text.length
-        target.text.edit { selection = TextRange(end) }
-        val fr = focusRequesters[target.id]
-        if (fr == null || runCatching { fr.requestFocus() }.isFailure) focusReq = FocusReq(target.id, end)
-        delete(n, undoable = false)
+        if (n.text.text.isNotEmpty() || n.children.isNotEmpty() || !n.url.isNullOrBlank() || prev == null) return false
+        val end = prev.text.text.length
+        prev.text.edit { selection = TextRange(end) }
+        val fr = focusRequesters[prev.id]
+        if (fr == null || runCatching { fr.requestFocus() }.isFailure) focusReq = FocusReq(prev.id, end)
+        delete(listOf(n), undoable = false)
         return true
     }
 
-    fun addAtEnd(parent: Node): Node {
-        val last = parent.children.lastOrNull { visible(it) }
-        if (last != null && last.text.text.isEmpty() && last.children.isEmpty() && last.url.isNullOrBlank() && last.attach == null) {
-            focusReq = FocusReq(last.id, 0)
-            return last
-        }
-        val n = create(parent, parent.children.size)
+    fun addAtEnd(parent: Node) {
+        val last = parent.children.lastOrNull()
+        val n = if (last != null && isBlank(last)) last else create(parent, parent.children.size)
         focusReq = FocusReq(n.id, 0)
-        return n
     }
 
-    fun notify(message: String) {
-        notice = Notice(message)
-    }
+    private fun isBlank(n: Node) = n.plain.isBlank() && n.url.isNullOrBlank() && n.children.isEmpty()
 
-    fun removeLink(n: Node) {
-        if (n.url == null) return
-        val old = n.url
-        val oldNote = n.note
-        n.url = null
-        n.note = null
-        touched(n)
-        notice = Notice("Link removed", "Undo") {
-            if (isAlive(n) && n.url == null) {
-                n.url = old
-                if (n.note == null) n.note = oldNote
-                touched(n)
-            }
-        }
-    }
-
-    /** Show the link field of [n] (adding an empty link if it has none) and put the cursor there. */
-    fun editLink(n: Node) {
+    /** The user left [n]: tidy its URL, and drop the bullet if nothing is left in it. */
+    fun finishEditing(n: Node) {
         if (!isAlive(n)) return
-        if (n.url == null) {
-            n.url = ""
+        val u = n.url?.let { LinkInfo.normalize(it) }?.ifEmpty { null }
+        if (u != n.url) {
+            n.url = u
             dirty(n)
         }
-        focusRequesters[n.id]?.let { runCatching { it.requestFocus() } }
-        focusedId = n.id
-        focusReq = FocusReq(n.id, n.url?.length ?: 0, FIELD_URL)
-    }
-
-    /**
-     * The user left [n] (title and link field). Tidy the link: drop an empty one, and turn an
-     * item whose whole text is a URL into a proper link item with a fetched title.
-     */
-    fun finishEditing(n: Node, edited: Boolean = true) {
-        if (!isAlive(n)) return
-        val u = n.url
-        if (u != null) {
-            val t = if (u.isBlank()) "" else LinkInfo.normalize(u)
-            if (t.isEmpty()) {
-                n.url = null
-                dirty(n)
-            } else if (t != u) {
-                n.url = t
-                dirty(n)
-            }
-            return
-        }
-        if (!edited) return
-        val text = n.plain.trim()
-        if (text.isNotEmpty() && !text.contains(' ') && LinkInfo.findUrl(text)?.equals(text, ignoreCase = true) == true) {
-            val clean = LinkInfo.clean(LinkInfo.normalize(text))
-            n.url = clean
-            n.text.setTextAndPlaceCursorAtEnd("")
-            touched(n)
-            fetchTitleLater(n, clean)
-        }
+        if (isBlank(n) && n !== zoomState && !n.isAncestorOf(zoomState)) delete(listOf(n), undoable = false)
     }
 
     // ---------------------------------------------------------------- navigation
@@ -700,105 +494,71 @@ object Store {
 
     fun reveal(n: Node) {
         if (!isAlive(n) || n === root) return
-        if (hideState && n.done) hideCompleted = false
         zoom = n.parent ?: root
         highlightId = n.id
     }
 
-    // ---------------------------------------------------------------- inbox, sharing
+    // ---------------------------------------------------------------- sharing, import
 
-    fun inbox(): Node {
-        meta["inbox"]?.toLongOrNull()?.let { byId[it] }?.let { return it }
-        val n = create(root, 0, "Inbox")
-        setMeta("inbox", n.id.toString())
-        return n
-    }
+    /** Where shared items go without asking, or null for "Always ask". */
+    var shareTarget: Node?
+        get() = meta["shareTarget"]?.toLongOrNull()?.let { byId[it] }?.takeIf { canHold(it, emptyList()) }
+        set(v) = setMeta("shareTarget", v?.id?.toString().orEmpty())
 
-    fun inboxOrNull(): Node? = meta["inbox"]?.toLongOrNull()?.let { byId[it] }
-
-    fun recentDestinations(): List<Node> =
-        meta["recent"].orEmpty().split(',').mapNotNull { s -> s.toLongOrNull()?.let { node(it) } }
-
-    fun pushRecent(n: Node) {
-        val ids = (listOf(n.id) + recentDestinations().map { it.id }.filter { it != n.id }).take(6)
-        setMeta("recent", ids.joinToString(","))
-    }
-
-    fun addShared(dest0: Node, text: String, url: String?, note: String?, attach: String?): Node {
-        val dest = if (isAlive(dest0)) dest0 else inbox()
-        val n = create(dest, 0, text, url, note, attach)
-        pushRecent(dest)
+    fun addShared(dest: Node, text: String, url: String?): Node {
+        val n = create(if (canHold(dest, emptyList())) dest else root, 0, text, url)
+        if (url != null && (text.isBlank() || text == url)) fetchTitleLater(n, url)
         return n
     }
 
     /** Fill in a page title after the fact (the share sheet may close before the fetch ends). */
-    fun fetchTitleLater(n: Node, url: String) {
+    private fun fetchTitleLater(n: Node, url: String) {
         appScope.launch {
-            val info = withContext(Dispatchers.IO) { LinkInfo.fetch(url) } ?: return@launch
-            if (!isAlive(n) || n.url != url) return@launch
-            val cur = n.plain
-            if (cur.isBlank() || cur == url) n.text.setTextAndPlaceCursorAtEnd(info.title)
-            if (n.note == null && info.author != null) n.note = info.author
-            touched(n)
+            val title = withContext(Dispatchers.IO) { LinkInfo.fetchTitle(url) } ?: return@launch
+            if (!isAlive(n) || n.url != url || !(n.plain.isBlank() || n.plain == url)) return@launch
+            n.text.setTextAndPlaceCursorAtEnd(title)
+            dirty(n)
             flush()
         }
     }
 
-    // ---------------------------------------------------------------- first run
-
-    private const val TIPS_VERSION = "3"
-    private val retiredTips = mapOf(
-        "Quick nest: swipe a bullet right (indent) or left (outdent)." to
-            "Swipe an item to the right to mark it completed. Swipe again to bring it back.",
-        "Long-press a bullet and let go for more: to-do, move to, copy, share, delete." to
-            "Long-press a bullet and let go for more: move to, links, copy, share, delete.",
-    )
-
-    /** Rewrites tips from older versions that describe gestures that changed meaning. */
-    private fun migrateTips() {
-        if (meta["tips"] == TIPS_VERSION) return
-        setMeta("tips", TIPS_VERSION)
-        for (n in byId.values) {
-            val replacement = retiredTips[n.plain] ?: continue
-            n.text.setTextAndPlaceCursorAtEnd(replacement)
-            touched(n)
+    /** Clipboard or file import: everything goes, [items] come in. */
+    fun replaceAll(items: List<TextFormat.Item>) {
+        markDeleted(byId.keys.toList())
+        byId.clear()
+        root.children.clear()
+        focusRequesters.clear()
+        scrollMemory.clear()
+        focusedId = null
+        notice = null
+        zoom = root
+        val last = arrayOfNulls<Node>(MAX_DEPTH + 1)
+        last[0] = root
+        for (it in items) {
+            val p = last[it.depth - 1] ?: root
+            last[it.depth] = create(p, p.children.size, it.text, it.url, it.done)
         }
-        val welcome = root.children.firstOrNull { it.plain == "Welcome to Twig" } ?: return
-        val have = welcome.children.mapTo(HashSet()) { it.plain }
-        for (tip in newTips) if (tip !in have) create(welcome, welcome.children.size, tip)
+        bump()
     }
-
-    private val newTips = listOf(
-        "Editing an item? The bar above the keyboard can nest, complete, move or delete it.",
-        "Paste a bare link as an item and it turns into a titled link.",
-    )
 
     fun ensureSeeded() {
-        if (meta["seeded"] != null) {
-            migrateTips()
-            return
-        }
+        if (meta["seeded"] != null) return
         setMeta("seeded", "1")
-        setMeta("tips", TIPS_VERSION)
-        if (byId.isNotEmpty()) return
-        inbox()
-        val w = create(root, root.children.size, "Welcome to Twig")
-        listOf(
-            "Tap a bullet to zoom in. Back zooms out.",
-            "Long-press a bullet, then drag to move it. Drag sideways while moving to nest it.",
-            "Swipe an item to the right to mark it completed. Swipe again to bring it back.",
-            "Enter makes a new item. Backspace on an empty item deletes it.",
-            "Long-press a bullet and let go for more: move to, links, copy, share, delete.",
-            "Editing an item? The bar above the keyboard can nest, complete, move or delete it.",
-            "Tap the little arrow to fold an item.",
-            "Share links, YouTube videos, text or images from any app. They land in Inbox.",
-            "Paste a bare link as an item and it turns into a titled link.",
-        ).forEachIndexed { i, t -> create(w, i, t) }
-        val b = create(root, root.children.size, "Bucket list")
-        val done = create(b, 0, "Find a note app that isn't annoying")
-        done.done = true
-        dirty(done)
-        create(b, 1, "See the northern lights")
-        create(b, 2, "Learn to make fresh pasta")
+        if (byId.isEmpty()) replaceAll(TextFormat.parse(WELCOME))
     }
+
+    private val WELCOME = """
+        - Welcome to Twig
+            - Tap a list to open it. Back goes up.
+            - Tap the dot of any bullet to open it and put bullets inside. Lists go three levels deep.
+            - Tap a bullet to edit it. Its URL field shows up below.
+            - Swipe right to complete a bullet. Swipe left to delete one.
+            - Long-press a dot to drag the bullet, or let go for more.
+            - ⋮ › Select acts on many bullets at once.
+            - ⋮ › Copy all as text gives you Markdown. Replace all from clipboard takes it back.
+        - Bucket list
+            - ~~Find a note app that isn't annoying~~
+            - See the northern lights
+            - Learn to make fresh pasta
+    """.trimIndent()
 }
