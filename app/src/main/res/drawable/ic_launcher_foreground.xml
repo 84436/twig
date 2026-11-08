@@ -1,0 +1,23 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- tree guide -->
+    <path android:fillColor="@color/icon_fg" android:fillAlpha="0.45"
+        android:pathData="M39,44h2v26h-2zM39,69h10v2h-10z M51,57h2v13h-2z" />
+    <!-- bullets -->
+    <path android:fillColor="@color/icon_fg"
+        android:pathData="M40,40m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0" />
+    <path android:fillColor="@color/icon_fg"
+        android:pathData="M52,55m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+    <path android:fillColor="@color/icon_fg"
+        android:pathData="M52,70m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+    <!-- lines -->
+    <path android:fillColor="@color/icon_fg"
+        android:pathData="M50,37.5h26a2.5,2.5 0,0 1,0 5h-26a2.5,2.5 0,0 1,0 -5z" />
+    <path android:fillColor="@color/icon_fg" android:fillAlpha="0.8"
+        android:pathData="M61,53h17a2,2 0,0 1,0 4h-17a2,2 0,0 1,0 -4z" />
+    <path android:fillColor="@color/icon_fg" android:fillAlpha="0.8"
+        android:pathData="M61,68h12a2,2 0,0 1,0 4h-12a2,2 0,0 1,0 -4z" />
+</vector>

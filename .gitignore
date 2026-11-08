@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+*.apk
+*.zip
+# release signing: keep these out of git, back them up yourself
+keystore.properties
+*.jks
