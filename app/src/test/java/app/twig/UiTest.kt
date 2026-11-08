@@ -306,6 +306,25 @@ class UiTest {
     }
 
     @Test
+    fun countsFollowMovesOnTheSamePage() {
+        lateinit var loose: Node
+        rule.runOnIdle { loose = Store.create(Store.root, 2, "loose") }
+        rule.waitForIdle()
+        rule.onNodeWithText("3  ›").assertExists()
+        rule.runOnIdle { Store.move(listOf(loose), bucket) }
+        rule.waitForIdle()
+        rule.onNodeWithText("4  ›").assertExists()
+        rule.onNodeWithText("Undo").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("3  ›").assertExists()
+        // a bullet that gets its first bullet turns into a list row right away
+        rule.runOnIdle { Store.move(listOf(byText("Learn to make fresh pasta")), loose) }
+        rule.waitForIdle()
+        rule.onNodeWithTag("label-${loose.id}").assertExists()
+        rule.onNodeWithText("2  ›").assertExists()
+    }
+
+    @Test
     fun movePickerKeepsThreeLevels() {
         lateinit var deep: Node
         rule.runOnIdle {
