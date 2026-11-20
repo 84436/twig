@@ -74,7 +74,7 @@ fun Page(page: Node, listState: LazyListState, onMove: (List<Node>) -> Unit) {
             override fun dragStart(node: Node): Boolean {
                 menuFor = null
                 Store.revealedId = null
-                return drag.start(node, rowsState.value, 0)
+                return drag.start(node, rowsState.value)
             }
 
             override fun drag(dy: Float) = drag.drag(dy)

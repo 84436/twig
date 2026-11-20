@@ -24,6 +24,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class StoreTest {
     private val root get() = Store.root
+    private val main = android.os.Handler(Looper.getMainLooper())
 
     @Before
     fun setup() {
@@ -207,6 +208,20 @@ class StoreTest {
         assertEquals("Aurora guide", a.plain)
         assertEquals(listOf("https://example.com/aurora"), seen)
         assertFalse(a.id in Store.fetching)
+        // the URL changed while waiting: the title is for another page, leave the text alone
+        Store.fetchTitle = {
+            main.post { a.url = "https://other.example" }
+            Thread.sleep(50)
+            "Stale title"
+        }
+        Store.useTitle(a)
+        repeat(200) {
+            if (a.id in Store.fetching) {
+                Thread.sleep(10)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+        }
+        assertEquals("Aurora guide", a.plain)
     }
 
     @Test
@@ -228,6 +243,15 @@ class StoreTest {
         assertEquals("make this bold", t.text.toString())
         val (n) = mk("**Groceries** list")
         assertEquals("Groceries list", Store.label(n))
+        // a selection that touches bold un-bolds all of it, instead of nesting markers
+        val u = TextFieldState("a **b** c", TextRange(0, 9))
+        Markup.toggleBold(u)
+        assertEquals("a b c", u.text.toString())
+        val v = TextFieldState("**See the** lights", TextRange(2, 5))
+        Markup.toggleBold(v)
+        assertEquals("See the lights", v.text.toString())
+        assertEquals("one\ntwo", Markup.styled("**one\ntwo**").text) // bold may span a line break
+        assertEquals(listOf(n), Store.search("groceries")) // markers don't get in the way of search
     }
 
     @Test
@@ -331,6 +355,8 @@ class StoreTest {
         val (c) = mk("c", parent = b)
         assertSame(root, Store.addShared(c, "x", null).parent)
         Store.shareTarget = root // Home counts too
+        assertSame(root, Store.shareTarget)
+        Store.replaceAll(TextFormat.parse("- Home\n- Other")) // and survives a replace-all, even with a bullet called Home
         assertSame(root, Store.shareTarget)
     }
 

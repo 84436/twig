@@ -15,7 +15,7 @@ import androidx.compose.ui.unit.em
  * the way Obsidian shows them on the line you're on.
  */
 object Markup {
-    private val bold = Regex("""\*\*(.+?)\*\*""")
+    private val bold = Regex("""\*\*(.+?)\*\*""", RegexOption.DOT_MATCHES_ALL)
     private val boldStyle = SpanStyle(fontWeight = FontWeight.Bold)
 
     /** The text without markers, for labels and sorting. */
@@ -58,7 +58,7 @@ object Markup {
         }
     }
 
-    /** Bold or un-bold the selected words. Nothing selected: nothing to do. */
+    /** Bold the selected words, or, if the selection touches bold, un-bold all of that. Nothing selected: nothing to do. */
     fun toggleBold(t: TextFieldState) {
         val s = t.text.toString()
         var a = t.selection.min
@@ -66,23 +66,18 @@ object Markup {
         while (a < b && s[a].isWhitespace()) a++
         while (b > a && s[b - 1].isWhitespace()) b--
         if (a == b) return
+        val hits = bold.findAll(s).filter { it.range.first < b && it.range.last >= a }.toList()
         t.edit {
-            when {
-                b - a >= 4 && s.startsWith("**", a) && s.startsWith("**", b - 2) -> {
-                    replace(b - 2, b, "")
-                    replace(a, a + 2, "")
-                    selection = TextRange(a, b - 4)
+            if (hits.isEmpty()) {
+                replace(b, b, "**")
+                replace(a, a, "**")
+                selection = TextRange(a + 2, b + 2)
+            } else {
+                for (m in hits.asReversed()) {
+                    replace(m.range.last - 1, m.range.last + 1, "")
+                    replace(m.range.first, m.range.first + 2, "")
                 }
-                a >= 2 && s.startsWith("**", a - 2) && s.startsWith("**", b) -> {
-                    replace(b, b + 2, "")
-                    replace(a - 2, a, "")
-                    selection = TextRange(a - 2, b - 2)
-                }
-                else -> {
-                    replace(b, b, "**")
-                    replace(a, a, "**")
-                    selection = TextRange(a + 2, b + 2)
-                }
+                selection = TextRange(hits.first().range.first, hits.last().range.last + 1 - 4 * hits.size)
             }
         }
     }

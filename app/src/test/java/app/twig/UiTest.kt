@@ -46,6 +46,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextInputSelection
@@ -319,7 +320,7 @@ class UiTest {
         rule.onNodeWithText("Move “Learn to make fresh pasta”").assertExists()
         click("dest-${welcome.id}")
         assertSame(welcome, pasta.parent)
-        // Delete can sit on the right too, and Nothing means nothing
+        // Delete can sit on the right too, and Nothing means nothing (not even a tap into the text)
         rule.runOnIdle {
             Store.swipeRight = SwipeAction.Delete
             Store.swipeLeft = SwipeAction.None
@@ -327,6 +328,7 @@ class UiTest {
         swipe("text-${lights.id}", -32f)
         rule.onNodeWithTag("delete-${lights.id}").assertDoesNotExist()
         assertNull(Store.selection)
+        assertNull(Store.focusedId)
         swipe("text-${lights.id}", 32f)
         click("delete-${lights.id}")
         assertFalse(Store.allNodes().any { it.plain == "See the northern lights" })
@@ -453,6 +455,20 @@ class UiTest {
     }
 
     @Test
+    fun moveUpKeepsTheBulletInView() {
+        rule.runOnIdle { repeat(40) { Store.create(bucket, bucket.children.size, "filler $it") } }
+        openBucket()
+        val n = pasta
+        click("text-${n.id}")
+        click("tool-Move up")
+        click("tool-Move up")
+        assertSame(n, bucket.children[0])
+        rule.onNodeWithTag("text-${n.id}").assertIsDisplayed()
+        menu("Sort Z–A") // and sorting starts you at the top
+        rule.onNodeWithText("See the northern lights").assertIsDisplayed()
+    }
+
+    @Test
     fun sortWithUndo() {
         openBucket()
         menu("Sort A–Z")
@@ -482,9 +498,6 @@ class UiTest {
         menu("Read-only")
         assertFalse(Store.readOnly)
         rule.onNodeWithTag("addBullet").assertExists()
-        menu("Read-only")
-        click("readOnlyOff") // the lock in the bar turns it off too
-        assertFalse(Store.readOnly)
     }
 
     @Test
@@ -541,9 +554,9 @@ class UiTest {
         rule.waitForIdle()
         rule.onNodeWithTag("url-${n.id}").assertDoesNotExist()
         rule.onNodeWithTag("text-${n.id}").assertIsFocused()
+        rule.onNodeWithText("example.com").assertExists() // the short look right away, not the typed text
         leave()
         assertEquals("https://Example.com/aurora", n.url)
-        rule.onNodeWithText("example.com").assertExists()
         rule.onNodeWithTag("link-${n.url}").performTouchInput { longClick() }
         rule.waitForIdle()
         assertEquals("https://Example.com/aurora", clipboard())

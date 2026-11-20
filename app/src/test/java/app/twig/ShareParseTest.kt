@@ -137,5 +137,7 @@ class ShareParseTest {
         assertEquals(plain("en.m.wikipedia.org"), look("https://en.m.wikipedia.org/wiki/X"))
         assertEquals(plain("mailto:a@b.c"), look("mailto:a@b.c"))
         assertEquals(plain("not a url"), look("not a url"))
+        assertEquals(yt("video"), look("youtube.com/watch?v=abc")) // typed without https://
+        assertEquals(plain("example.com"), look("Example.com/aurora"))
     }
 }

@@ -48,6 +48,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -216,7 +217,6 @@ fun BulletRow(
                 } else {
                     Modifier.pointerInput(node.id, actions, right, left) {
                         swipeRow(
-                            allow = { dx -> Store.revealedId == node.id || (if (dx > 0) right else left) != SwipeAction.None },
                             onStart = {
                                 base[0] = if (Store.revealedId == node.id) sign(swipe.targetValue) * reveal else 0f
                                 if (base[0] == 0f) Store.revealedId = null
@@ -323,7 +323,8 @@ private fun BoxScope.DeleteButton(node: Node, offset: () -> Float) {
     val x = offset()
     if (x == 0f || (if (x > 0) Store.swipeRight else Store.swipeLeft) != SwipeAction.Delete) return
     val cs = MaterialTheme.colorScheme
-    Box(Modifier.matchParentSize(), contentAlignment = if (x > 0) Alignment.CenterStart else Alignment.CenterEnd) {
+    // swipes are physical left/right, also in right-to-left languages
+    Box(Modifier.matchParentSize(), contentAlignment = if (x > 0) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight) {
         Column(
             Modifier
                 .fillMaxHeight()
@@ -457,7 +458,7 @@ private fun a11y(node: Node, canOpen: Boolean, actions: RowActions): List<Custom
  * onFocusChanged also fires with "unfocused" when a field first appears.
  */
 @Composable
-internal fun Modifier.trackFocus(node: Node): Modifier {
+private fun Modifier.trackFocus(node: Node): Modifier {
     val had = remember { booleanArrayOf(false) }
     return onFocusChanged {
         if (it.isFocused) {
@@ -472,7 +473,7 @@ internal fun Modifier.trackFocus(node: Node): Modifier {
 
 /** Notices when the user stops editing [node] (focus leaves it, or the row goes away while focused). */
 @Composable
-internal fun EditSession(node: Node, editing: Boolean) {
+private fun EditSession(node: Node, editing: Boolean) {
     val was = remember(node.id) { booleanArrayOf(editing) }
     LaunchedEffect(editing) {
         if (was[0] && !editing) Store.finishEditing(node)
@@ -485,7 +486,7 @@ internal fun EditSession(node: Node, editing: Boolean) {
 
 /** Registers the focus requester, honours focus requests and persists text edits. */
 @Composable
-internal fun TrackFocusAndEdits(node: Node, fr: FocusRequester) {
+private fun TrackFocusAndEdits(node: Node, fr: FocusRequester) {
     DisposableEffect(node.id) {
         Store.focusRequesters[node.id] = fr
         onDispose { if (Store.focusRequesters[node.id] === fr) Store.focusRequesters.remove(node.id) }
@@ -509,7 +510,7 @@ internal fun TrackFocusAndEdits(node: Node, fr: FocusRequester) {
 
 /** The bullet's URL, editable. Opened from the keyboard bar; takes the cursor when it opens. */
 @Composable
-internal fun UrlField(node: Node) {
+private fun UrlField(node: Node) {
     val cs = MaterialTheme.colorScheme
     val state = remember(node.id) { TextFieldState(node.url.orEmpty()) }
     val fr = remember { FocusRequester() }
@@ -589,7 +590,7 @@ fun LinkLabel(url: String, modifier: Modifier = Modifier) {
 
 /** Tap opens, long-press copies. */
 @Composable
-internal fun LinkLine(url: String, enabled: Boolean = true) {
+private fun LinkLine(url: String, enabled: Boolean) {
     val ctx = LocalContext.current
     LinkLabel(
         url,
@@ -639,7 +640,6 @@ class SplitOnNewline(private val onSplit: (String, List<String>, String) -> Unit
  * distance + velocity on release. Vertical swipes are left alone so the list scrolls.
  */
 suspend fun PointerInputScope.swipeRow(
-    allow: (dx: Float) -> Boolean,
     onStart: () -> Unit,
     onMove: (dx: Float) -> Unit,
     onEnd: (dx: Float, velocityX: Float) -> Unit,
@@ -656,7 +656,7 @@ suspend fun PointerInputScope.swipeRow(
         if (!ch.pressed || ch.isConsumed) return@awaitEachGesture
         total += ch.positionChange()
         if (total.getDistance() > slop) {
-            if (abs(total.x) <= abs(total.y) * 1.5f || !allow(total.x)) return@awaitEachGesture
+            if (abs(total.x) <= abs(total.y) * 1.5f) return@awaitEachGesture
             ch.consume()
             break
         }

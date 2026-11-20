@@ -39,7 +39,6 @@ class DragState(
 
     private var dy by mutableFloatStateOf(0f)
     private var startOffset = 0
-    private var headerCount = 0
     private var autoScroll: Job? = null
 
     private fun info() = draggingId?.let { id -> listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id } }
@@ -56,13 +55,12 @@ class DragState(
         return visualTop(i.size) - i.offset
     }
 
-    fun start(node: Node, rows: List<Node>, headerCount: Int): Boolean {
+    fun start(node: Node, rows: List<Node>): Boolean {
         if (draggingId != null) return false
         val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == node.id } ?: return false
         preview = rows
         startOffset = item.offset
         dy = 0f
-        this.headerCount = headerCount
         draggingId = node.id
         autoScroll?.cancel()
         autoScroll = scope.launch { autoScrollLoop() }
@@ -90,7 +88,7 @@ class DragState(
         for (it in listState.layoutInfo.visibleItemsInfo) {
             val key = it.key as? Long ?: continue
             if (key == id) continue
-            val li = it.index - headerCount
+            val li = it.index
             if (li !in list.indices) continue
             val above = li < k
             val pos = if (above) it.offset else it.offset - size
@@ -108,7 +106,7 @@ class DragState(
         val firstOff = listState.firstVisibleItemScrollOffset
         preview = list.toMutableList().apply { add(newK, removeAt(k)) }
         // LazyColumn anchors on the first visible key; keep the viewport still when that row moves.
-        if (firstIdx == k + headerCount || firstIdx == newK + headerCount) {
+        if (firstIdx == k || firstIdx == newK) {
             scope.launch { listState.scrollToItem(firstIdx, firstOff) }
         }
     }

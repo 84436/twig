@@ -16,7 +16,7 @@ object Sites {
     private val rules: List<(Uri, String) -> LinkLook?> = listOf(::youtube, ::github, ::osu)
 
     fun look(url: String): LinkLook {
-        val uri = Uri.parse(url.trim())
+        val uri = Uri.parse(LinkInfo.normalize(url))
         val host = uri.host?.lowercase()?.removePrefix("www.")
         if (host.isNullOrEmpty() || uri.scheme?.lowercase() !in setOf("http", "https")) return LinkLook(Glyph.Link, url.trim())
         return rules.firstNotNullOfOrNull { it(uri, host) } ?: LinkLook(Glyph.Link, host)

@@ -276,7 +276,7 @@ object Store {
     }
 
     private fun score(n: Node, terms: List<String>): Int? {
-        val t = n.text.text
+        val t = Markup.plain(n.text.text)
         var s = 0
         for (term in terms) {
             val i = t.indexOf(term, ignoreCase = true)
@@ -567,7 +567,8 @@ object Store {
         appScope.launch {
             val title = withContext(Dispatchers.IO) { fetchTitle(url) }
             fetching = fetching - n.id
-            if (title == null || !isAlive(n)) return@launch
+            // the URL may have changed while we waited
+            if (title == null || !isAlive(n) || n.url?.let(LinkInfo::normalize) != url) return@launch
             n.text.setTextAndPlaceCursorAtEnd(title)
             dirty(n)
         }
@@ -616,7 +617,7 @@ object Store {
             val p = last[it.depth - 1] ?: root
             last[it.depth] = create(p, p.children.size, it.text, it.url, it.done)
         }
-        shareTarget = root.children.firstOrNull { label(it) == target }
+        if (shareTarget !== root) shareTarget = root.children.firstOrNull { label(it) == target }
         bump()
     }
 

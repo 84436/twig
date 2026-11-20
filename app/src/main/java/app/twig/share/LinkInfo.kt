@@ -69,23 +69,20 @@ object LinkInfo {
         return t.trim().ifEmpty { null }
     }
 
-    /** Network: the page title (YouTube via oEmbed). Null on any failure. Call off the main thread. */
-    fun fetchTitle(url: String): String? = try {
-        if (isYouTube(url)) {
-            JSONObject(get("https://www.youtube.com/oembed?format=json&url=" + URLEncoder.encode(url, "UTF-8"), 64 * 1024)).getString("title")
-        } else {
-            val html = get(url, 384 * 1024)
-            val raw = Regex("""<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)""", RegexOption.IGNORE_CASE).find(html)
-                ?: Regex("""<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:title""", RegexOption.IGNORE_CASE).find(html)
-                ?: Regex("""<title[^>]*>([^<]+)</title>""", RegexOption.IGNORE_CASE).find(html)
-            raw?.groupValues?.get(1)?.let { cleanTitle(Html.fromHtml(it, Html.FROM_HTML_MODE_LEGACY).toString()) }
-        }
-    } catch (_: Throwable) {
-        null
-    }
+    /** Network: the page title (YouTube via oEmbed, then the page itself). Null on any failure. Call off the main thread. */
+    fun fetchTitle(url: String): String? =
+        (if (isYouTube(url)) runCatching { JSONObject(get("https://www.youtube.com/oembed?format=json&url=" + URLEncoder.encode(url, "UTF-8"), 64 * 1024)).getString("title") }.getOrNull() else null)
+            ?: runCatching {
+                val html = get(url, 384 * 1024)
+                val raw = Regex("""<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)""", RegexOption.IGNORE_CASE).find(html)
+                    ?: Regex("""<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:title""", RegexOption.IGNORE_CASE).find(html)
+                    ?: Regex("""<title[^>]*>([^<]+)</title>""", RegexOption.IGNORE_CASE).find(html)
+                raw?.groupValues?.get(1)?.let { cleanTitle(Html.fromHtml(it, Html.FROM_HTML_MODE_LEGACY).toString()) }
+            }.getOrNull()
 
     private fun get(url: String, max: Int): String {
-        val c = URL(url).openConnection() as HttpURLConnection
+        // Android blocks cleartext; most http:// sites answer on https:// too
+        val c = URL(url.replaceFirst(Regex("^http://", RegexOption.IGNORE_CASE), "https://")).openConnection() as HttpURLConnection
         c.connectTimeout = 4000
         c.readTimeout = 5000
         c.instanceFollowRedirects = true

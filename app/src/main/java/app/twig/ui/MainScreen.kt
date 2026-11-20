@@ -45,10 +45,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.input.TextFieldLineLimits
-import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -85,8 +81,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
@@ -94,7 +88,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -125,7 +118,7 @@ fun MainScreen() {
     var importing by remember { mutableStateOf<List<TextFormat.Item>?>(null) }
     var settings by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
-    val editingNode = Store.focusedId?.let { Store.node(it) }?.takeIf { selection == null && !searching && !Store.readOnly }
+    val editingNode = Store.focusedId?.let { Store.node(it) }?.takeIf { !Store.readOnly }
 
     // One scroll position per list, so going back lands where you were.
     val listState = remember(zoom) {
@@ -137,11 +130,7 @@ fun MainScreen() {
 
     // Keyboard put away: back to reading (no cursor, no keyboard bar).
     val ime = WindowInsets.isImeVisible
-    val imeWas = remember { booleanArrayOf(false) }
-    LaunchedEffect(ime) {
-        if (imeWas[0] && !ime) focusManager.clearFocus()
-        imeWas[0] = ime
-    }
+    LaunchedEffect(ime) { if (!ime) focusManager.clearFocus() }
 
     BackHandler(enabled = searching || selection != null || zoom !== Store.root) {
         when {
@@ -194,6 +183,7 @@ fun MainScreen() {
                 selection != null -> SelectionBar(selection.size, all = { Store.selection = zoom.children.mapTo(HashSet()) { it.id } })
                 else -> TitleBar(zoom, onSearch = {
                     focusManager.clearFocus()
+                    snackbar.currentSnackbarData?.dismiss() // its timer would stop while search is up
                     searching = true
                 }) {
                     MoreMenu(
@@ -201,13 +191,17 @@ fun MainScreen() {
                             focusManager.clearFocus()
                             Store.selection = emptySet()
                         },
-                        onSort = { Store.sort(zoom, it) },
+                        onSort = {
+                            Store.sort(zoom, it)
+                            listState.requestScrollToItem(0) // the list would stay on the old top bullet
+                        },
                         onCopyAll = { Actions.copy(ctx, TextFormat.export(Store.root)) },
                         onPasteAll = { importing = TextFormat.parse(Actions.clipboardText(ctx)) },
                         onExport = { exportFile.launch("twig-${LocalDate.now()}.md") },
                         onImport = { importFile.launch(arrayOf("text/*")) },
                         onSettings = {
                             focusManager.clearFocus()
+                            Store.revealedId = null // a Delete button would outlive a changed swipe setting
                             settings = true
                         },
                     )
@@ -219,7 +213,16 @@ fun MainScreen() {
                     SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter)) { data -> SwipeableSnackbar(data) }
                 }
                 if (selection != null) BatchBar(zoom.children.filter { it.id in selection }, onMove = { moving = it })
-                else editingNode?.let { EditToolbar(it, onMove = { n -> moving = n }) }
+                else editingNode?.let { n ->
+                    EditToolbar(n, onMove = { moving = it }) { d ->
+                        // keep the bullet in view: the list holds on to its first visible row, not this one
+                        if (Store.moveBy(n, d)) {
+                            val i = zoom.children.indexOf(n)
+                            val vis = listState.layoutInfo.visibleItemsInfo
+                            if (vis.isNotEmpty() && (i <= vis.first().index || i >= vis.last().index)) listState.requestScrollToItem(maxOf(0, i - 1))
+                        }
+                    }
+                }
             }
         }
     }
@@ -280,11 +283,6 @@ private fun TitleBar(zoom: Node, onSearch: () -> Unit, menu: @Composable () -> U
                 )
             }
         }
-        if (Store.readOnly) {
-            IconButton(onClick = { Store.readOnly = false }, modifier = Modifier.testTag("readOnlyOff")) {
-                Icon(Ic.Lock, "Read-only: tap to edit again", tint = cs.primary)
-            }
-        }
         IconButton(onClick = onSearch, modifier = Modifier.testTag("openSearch")) { Icon(Ic.Search, "Search") }
         menu()
     }
@@ -293,41 +291,15 @@ private fun TitleBar(zoom: Node, onSearch: () -> Unit, menu: @Composable () -> U
 /** Search on its own screen: a field on top, results below. Tapping a result goes to it. */
 @Composable
 private fun SearchView(onClose: () -> Unit, onOpen: (Node) -> Unit) {
-    val cs = MaterialTheme.colorScheme
     val state = rememberTextFieldState()
     val q = state.text.toString()
     val results = remember(q, Store.version) { Store.search(q) }
     val fr = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
-    val style = MaterialTheme.typography.bodyLarge.copy(color = cs.onSurface)
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
-                .height(52.dp)
-                .clip(RoundedCornerShape(26.dp))
-                .background(cs.surfaceContainerHigh)
-                .testTag("searchBar"),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(Modifier.statusBarsPadding().padding(start = 4.dp, end = 12.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onClose, modifier = Modifier.testTag("closeSearch")) { Icon(Ic.Back, "Close search") }
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                if (state.text.isEmpty()) Text("Search", style = style, color = cs.onSurfaceVariant, maxLines = 1)
-                BasicTextField(
-                    state = state,
-                    modifier = Modifier.fillMaxWidth().focusRequester(fr).testTag("searchField"),
-                    textStyle = style,
-                    lineLimits = TextFieldLineLimits.SingleLine,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    onKeyboardAction = { results.firstOrNull()?.let(onOpen) },
-                    cursorBrush = SolidColor(cs.primary),
-                )
-            }
-            if (state.text.isNotEmpty()) {
-                IconButton(onClick = { state.clearText() }) { Icon(Ic.Close, "Clear search", Modifier.size(20.dp)) }
-            }
+            SearchField(state, "Search", fr, Modifier.weight(1f).testTag("searchField")) { results.firstOrNull()?.let(onOpen) }
         }
         if (q.isNotBlank()) SearchResults(q, results, onOpen)
     }
@@ -374,7 +346,7 @@ private fun MoreMenu(
 
 /** Above the keyboard while a bullet is being edited. */
 @Composable
-private fun EditToolbar(node: Node, onMove: (List<Node>) -> Unit) {
+private fun EditToolbar(node: Node, onMove: (List<Node>) -> Unit, onStep: (Int) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val siblings = node.parent?.children.orEmpty()
     val index = remember(Store.version, node) { siblings.indexOf(node) }
@@ -401,8 +373,8 @@ private fun EditToolbar(node: Node, onMove: (List<Node>) -> Unit) {
             }
             if (armed) Text("Replace text?", style = MaterialTheme.typography.labelLarge, color = cs.primary, modifier = Modifier.padding(end = 6.dp))
             Tool(Ic.Bold, "Bold", enabled = !node.text.selection.collapsed) { Markup.toggleBold(node.text) }
-            Tool(Ic.Up, "Move up", enabled = index > 0) { Store.moveBy(node, -1) }
-            Tool(Ic.Down, "Move down", enabled = index in 0 until siblings.lastIndex) { Store.moveBy(node, 1) }
+            Tool(Ic.Up, "Move up", enabled = index > 0) { onStep(-1) }
+            Tool(Ic.Down, "Move down", enabled = index in 0 until siblings.lastIndex) { onStep(1) }
             Tool(Ic.Move, "Move to…") { onMove(listOf(node)) }
             Tool(if (node.done) Ic.Undo else Ic.Check, if (node.done) "Mark not done" else "Mark done") { Store.toggleDone(node) }
         }
@@ -525,14 +497,14 @@ private fun MoveDialog(nodes: List<Node>, onDismiss: () -> Unit, onPick: (Node) 
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 10.dp),
                 )
-                DestinationPicker(nodes, onPick, Modifier.weight(1f))
+                DestinationPicker(nodes, onPick, Modifier.weight(1f), autoFocus = !Store.readOnly)
             }
         }
     }
 }
 
 /** Everything that's a preference rather than an action. Changes apply as you tap. */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsSheet(onDismiss: () -> Unit) {
     var askTarget by remember { mutableStateOf(false) }
