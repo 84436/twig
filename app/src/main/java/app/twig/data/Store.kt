@@ -5,10 +5,11 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.TextRange
 import app.twig.share.LinkInfo
@@ -17,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.Collator
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
@@ -26,6 +28,8 @@ class Notice(val message: String, val undo: () -> Unit)
 
 /** A request to put the cursor in a bullet. Plain class on purpose: every request is distinct. */
 class FocusReq(val nodeId: Long, val cursor: Int)
+
+enum class SwipeAction(val label: String) { None("Nothing"), Done("Done/undone"), Select("Select"), Move("Move to…"), Delete("Delete") }
 
 /**
  * The whole outline, in memory. Everything here runs on the main thread except the
@@ -48,7 +52,8 @@ object Store {
         private set
     private val byId = HashMap<Long, Node>()
     private var nextId = 1L
-    private val meta = HashMap<String, String>()
+    /** Settings and bits of state that outlive the app. Snapshot state, so settings show up live. */
+    private val meta = mutableStateMapOf<String, String>()
 
     /** Bumped on every structural change; pages re-read their children when it changes. */
     var version by mutableIntStateOf(0)
@@ -74,6 +79,12 @@ object Store {
     var selection by mutableStateOf<Set<Long>?>(null)
     /** The bullet whose Delete button is showing. */
     var revealedId by mutableStateOf<Long?>(null)
+    /** The bullet whose URL field is open. */
+    var urlFor by mutableStateOf<Long?>(null)
+    /** Bullets waiting for their page title. */
+    var fetching by mutableStateOf(emptySet<Long>())
+    /** Network: a page's title. Swappable for tests. */
+    var fetchTitle: (String) -> String? = LinkInfo::fetchTitle
     val focusRequesters = HashMap<Long, FocusRequester>()
     /** Scroll position per list (index, offset), so going back lands where you were. */
     val scrollMemory = HashMap<Long, Pair<Int, Int>>()
@@ -109,6 +120,9 @@ object Store {
         notice = null
         selection = null
         revealedId = null
+        urlFor = null
+        fetching = emptySet()
+        fetchTitle = LinkInfo::fetchTitle
         flushScheduled = false
         thread(name = "twig-load", priority = Thread.MAX_PRIORITY) {
             try {
@@ -232,7 +246,7 @@ object Store {
             depth(dest) + 1 + (nodes.maxOfOrNull { height(it) } ?: 0) <= MAX_DEPTH
 
     fun label(n: Node): String =
-        if (n === root) "Home" else n.plain.lineSequence().first().trim().take(60).ifEmpty { n.url ?: "Untitled" }
+        if (n === root) "Home" else Markup.plain(n.plain.lineSequence().first()).trim().take(60).ifEmpty { n.url ?: "Untitled" }
 
     /** "Home › Groceries": where [n] lives. */
     fun pathLabel(n: Node): String {
@@ -347,6 +361,35 @@ object Store {
         return true
     }
 
+    /** One step up (-1) or down (+1) among its siblings. */
+    fun moveBy(n: Node, delta: Int): Boolean {
+        val p = n.parent ?: return false
+        val i = p.children.indexOf(n) + delta
+        return i in p.children.indices && reorder(n, i)
+    }
+
+    /** Puts [page]'s bullets in A-Z (or Z-A) order of their text, for good. Undoable. */
+    fun sort(page: Node, descending: Boolean) {
+        val before = page.children.toList()
+        val collator = Collator.getInstance()
+        val sorted = before.sortedWith { a, b -> collator.compare(label(a), label(b)) * if (descending) -1 else 1 }
+        if (sorted == before) return
+        setOrder(page, sorted)
+        notice = Notice(if (descending) "Sorted Z–A" else "Sorted A–Z") {
+            setOrder(page, before.filter { it.parent === page && isAlive(it) } + page.children.filter { it !in before })
+        }
+    }
+
+    private fun setOrder(page: Node, order: List<Node>) {
+        page.children.clear()
+        order.forEachIndexed { i, n ->
+            page.children.add(n)
+            n.rank = (i + 1).toDouble()
+            dirty(n)
+        }
+        bump()
+    }
+
     /** "Move to…": [nodes] go to the end of [dest], keeping their order. Undoable. */
     fun move(nodes: List<Node>, dest: Node): Boolean {
         val list = nodes.filter { it !== root && isAlive(it) }
@@ -432,18 +475,6 @@ object Store {
         addLines(p, p.children.indexOf(n) + 1, parts, after)
     }
 
-    /** Enter in a list's title: the new lines become its first bullets. */
-    fun onHeaderEnter(z: Node, before: String, parts: List<String>, after: String) {
-        if (!isAlive(z) || parts.size < 2) return
-        if (before.isEmpty() && parts.size == 2 && parts.all { it.isEmpty() }) {
-            focusReq = FocusReq(create(z, 0).id, 0) // Enter at the start keeps the title
-            return
-        }
-        z.text.setTextAndPlaceCursorAtEnd(before + parts.first())
-        dirty(z)
-        addLines(z, 0, parts, after)
-    }
-
     private fun addLines(parent: Node, index: Int, parts: List<String>, after: String) {
         val lines = parts.drop(1).toMutableList()
         lines[lines.lastIndex] += after
@@ -453,17 +484,15 @@ object Store {
         last?.let { focusReq = FocusReq(it.id, parts.last().length) }
     }
 
-    /** Backspace in an empty bullet: delete it and continue at the end of the one above (or the list's title). */
+    /** Backspace in an empty bullet: delete it and continue at the end of the one above. */
     fun backspaceEmpty(n: Node): Boolean {
         val p = n.parent ?: return false
-        val prev = p.children.getOrNull(p.children.indexOf(n) - 1) ?: p.takeIf { it !== root }
+        val prev = p.children.getOrNull(p.children.indexOf(n) - 1)
         if (n.text.text.isNotEmpty() || n.children.isNotEmpty() || !n.url.isNullOrBlank() || prev == null) return false
         val end = prev.text.text.length
         prev.text.edit { selection = TextRange(end) }
         val fr = focusRequesters[prev.id]
-        // a list row has no text field to land in; don't leave a request for its title later
-        val canLand = prev.children.isEmpty() || prev === zoomState
-        if ((fr == null || runCatching { fr.requestFocus() }.isFailure) && canLand) focusReq = FocusReq(prev.id, end)
+        if (fr == null || runCatching { fr.requestFocus() }.isFailure) focusReq = FocusReq(prev.id, end)
         delete(listOf(n), undoable = false)
         return true
     }
@@ -478,6 +507,7 @@ object Store {
 
     /** The user left [n]: tidy its URL, and drop the bullet if nothing is left in it. */
     fun finishEditing(n: Node) {
+        if (urlFor == n.id) urlFor = null
         if (!isAlive(n)) return
         val u = n.url?.let { LinkInfo.normalize(it) }?.ifEmpty { null }
         if (u != n.url) {
@@ -490,9 +520,7 @@ object Store {
     // ---------------------------------------------------------------- navigation
 
     fun zoomOut() {
-        val z = zoomState
-        zoom = z.parent ?: root
-        highlightId = z.id
+        zoom = zoomState.parent ?: root
     }
 
     fun reveal(n: Node) {
@@ -503,9 +531,9 @@ object Store {
 
     // ---------------------------------------------------------------- sharing, import
 
-    /** Where shared items go without asking, or null for "Always ask". */
+    /** Where shared items go without asking (Home counts), or null for "Always ask". */
     var shareTarget: Node?
-        get() = meta["shareTarget"]?.toLongOrNull()?.let { byId[it] }?.takeIf { canHold(it, emptyList()) }
+        get() = meta["shareTarget"]?.toLongOrNull()?.let { node(it) }?.takeIf { canHold(it, emptyList()) }
         set(v) = setMeta("shareTarget", v?.id?.toString().orEmpty())
 
     fun addShared(dest: Node, text: String, url: String?): Node {
@@ -517,13 +545,60 @@ object Store {
     /** Fill in a page title after the fact (the share sheet may close before the fetch ends). */
     private fun fetchTitleLater(n: Node, url: String) {
         appScope.launch {
-            val title = withContext(Dispatchers.IO) { LinkInfo.fetchTitle(url) } ?: return@launch
+            val title = withContext(Dispatchers.IO) { fetchTitle(url) } ?: return@launch
             if (!isAlive(n) || n.url != url || !(n.plain.isBlank() || n.plain == url)) return@launch
             n.text.setTextAndPlaceCursorAtEnd(title)
             dirty(n)
             flush()
         }
     }
+
+    /** Done with the URL field: back to the bullet's text. */
+    fun closeUrl(n: Node) {
+        urlFor = null
+        focusReq = FocusReq(n.id, n.text.text.length)
+    }
+
+    /** The keyboard bar's "use page title": replaces [n]'s text once the title is in. */
+    fun useTitle(n: Node) {
+        val url = n.url?.let { LinkInfo.normalize(it) } ?: return
+        if (n.id in fetching) return
+        fetching = fetching + n.id
+        appScope.launch {
+            val title = withContext(Dispatchers.IO) { fetchTitle(url) }
+            fetching = fetching - n.id
+            if (title == null || !isAlive(n)) return@launch
+            n.text.setTextAndPlaceCursorAtEnd(title)
+            dirty(n)
+        }
+    }
+
+    // ---------------------------------------------------------------- settings
+
+    var readOnly: Boolean
+        get() = meta["readOnly"] == "1"
+        set(v) = setMeta("readOnly", if (v) "1" else "")
+
+    /** Bullet text size in dp. */
+    var textSize: Int
+        get() = meta["textSize"]?.toIntOrNull() ?: 16
+        set(v) = setMeta("textSize", v.toString())
+
+    var monospace: Boolean
+        get() = meta["font"] == "mono"
+        set(v) = setMeta("font", if (v) "mono" else "")
+
+    /** Finger moves right. */
+    var swipeRight: SwipeAction
+        get() = swipe("swipeRight", SwipeAction.Done)
+        set(v) = setMeta("swipeRight", v.name)
+
+    /** Finger moves left. */
+    var swipeLeft: SwipeAction
+        get() = swipe("swipeLeft", SwipeAction.Delete)
+        set(v) = setMeta("swipeLeft", v.name)
+
+    private fun swipe(k: String, default: SwipeAction) = SwipeAction.entries.firstOrNull { it.name == meta[k] } ?: default
 
     /** Clipboard or file import: everything goes, [items] come in. Shares keep going to a list of the same name. */
     fun replaceAll(items: List<TextFormat.Item>) {
@@ -553,12 +628,12 @@ object Store {
 
     private val WELCOME = """
         - Welcome to Twig
-            - Tap a list to open it. Back goes up.
-            - Tap the dot of any bullet to open it and put bullets inside. Lists go three levels deep.
-            - Tap a bullet to edit it. Its URL field shows up below.
-            - Swipe right to complete a bullet. Swipe left to delete one.
+            - Tap a list's dot or its › to open it. Back, or the path at the top, goes up.
+            - Tap the dot of any bullet to put bullets inside it. Lists go three levels deep.
+            - Tap a bullet's text to edit it. The bar above the keyboard adds a URL, makes words **bold**, moves and completes.
+            - Swipe right to complete, swipe left to delete. ⋮ › Settings changes what swipes do.
             - Long-press a dot to drag the bullet, or let go for more.
-            - ⋮ › Select acts on many bullets at once.
+            - ⋮ › Select acts on many bullets at once. ⋮ › Read-only keeps the keyboard away.
             - ⋮ › Copy all as text gives you Markdown. Replace all from clipboard takes it back.
         - Bucket list
             - ~~Find a note app that isn't annoying~~

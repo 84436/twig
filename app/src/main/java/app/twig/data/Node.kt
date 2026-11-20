@@ -1,10 +1,10 @@
 package app.twig.data
 
 import androidx.compose.foundation.text.input.TextFieldState
-import androidx.compose.runtime.Stable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.mutableStateOf
 
 /** Bullets nest at most this deep: list › list › bullet. */
 const val MAX_DEPTH = 3

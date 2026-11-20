@@ -80,25 +80,34 @@ class ShareParseTest {
 
     private fun look(url: String) = Sites.look(url)
     private fun plain(text: String) = LinkLook(Glyph.Link, text)
-    private val yt = LinkLook(Glyph.Play, "YouTube")
+    private fun yt(what: String) = LinkLook(Glyph.YouTube, "YouTube $what")
 
     @Test
-    fun youtubeVideosOnly() {
-        assertEquals(yt, look("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
-        assertEquals(yt, look("https://youtu.be/dQw4w9WgXcQ"))
-        assertEquals(yt, look("https://m.youtube.com/watch?v=abc&t=10"))
-        assertEquals(yt, look("https://youtube.com/shorts/abc"))
-        assertEquals(yt, look("https://music.youtube.com/watch?v=abc"))
-        assertEquals(plain("youtube.com"), look("https://www.youtube.com/@channel"))
+    fun youtube() {
+        assertEquals(yt("video"), look("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+        assertEquals(yt("video"), look("https://youtu.be/dQw4w9WgXcQ"))
+        assertEquals(yt("video"), look("https://m.youtube.com/watch?v=abc&t=10"))
+        assertEquals(yt("video"), look("https://youtube.com/shorts/abc"))
+        assertEquals(yt("video"), look("https://music.youtube.com/watch?v=abc"))
+        assertEquals(yt("video"), look("https://www.youtube.com/watch?v=abc&list=PL1")) // a video in a playlist is a video
+        assertEquals(yt("channel"), look("https://www.youtube.com/@channel"))
+        assertEquals(yt("channel"), look("https://www.youtube.com/@channel/videos"))
+        assertEquals(yt("channel"), look("https://www.youtube.com/channel/UC123"))
+        assertEquals(yt("channel"), look("https://www.youtube.com/c/Name"))
+        assertEquals(yt("channel"), look("https://www.youtube.com/user/name"))
+        assertEquals(yt("playlist"), look("https://www.youtube.com/playlist?list=PL123"))
+        assertEquals(plain("youtube.com"), look("https://www.youtube.com/playlist"))
         assertEquals(plain("youtube.com"), look("https://www.youtube.com/watch"))
         assertEquals(plain("youtube.com"), look("https://www.youtube.com/"))
+        assertEquals(plain("youtube.com"), look("https://www.youtube.com/results?search_query=x"))
     }
 
     @Test
     fun githubExactRepoOnly() {
-        assertEquals(plain("84436/twig"), look("https://github.com/84436/twig"))
-        assertEquals(plain("84436/twig"), look("https://github.com/84436/twig/"))
-        assertEquals(plain("84436/twig"), look("https://www.github.com/84436/twig"))
+        val repo = LinkLook(Glyph.GitHub, "84436/twig")
+        assertEquals(repo, look("https://github.com/84436/twig"))
+        assertEquals(repo, look("https://github.com/84436/twig/"))
+        assertEquals(repo, look("https://www.github.com/84436/twig"))
         assertEquals(plain("github.com"), look("https://github.com/84436/twig/releases"))
         assertEquals(plain("github.com"), look("https://github.com/"))
         assertEquals(plain("github.com"), look("https://github.com/84436"))
@@ -107,6 +116,19 @@ class ShareParseTest {
         assertEquals(plain("github.com"), look("https://github.com/features/copilot"))
         assertEquals(plain("github.com"), look("https://github.com/advisories/GHSA-jfh8-c2jp-5v3q"))
         assertEquals(plain("gist.github.com"), look("https://gist.github.com/84436/abc"))
+    }
+
+    @Test
+    fun osuBeatmaps() {
+        val map = LinkLook(Glyph.Cookie, "Beatmap")
+        assertEquals(map, look("https://osu.ppy.sh/beatmapsets/1234#osu/5678"))
+        assertEquals(map, look("https://osu.ppy.sh/beatmapsets/1234"))
+        assertEquals(map, look("https://osu.ppy.sh/beatmaps/5678"))
+        assertEquals(map, look("https://osu.ppy.sh/b/5678"))
+        assertEquals(map, look("https://osu.ppy.sh/s/1234"))
+        assertEquals(plain("osu.ppy.sh"), look("https://osu.ppy.sh/beatmapsets"))
+        assertEquals(plain("osu.ppy.sh"), look("https://osu.ppy.sh/users/2"))
+        assertEquals(plain("osu.ppy.sh"), look("https://osu.ppy.sh/beatmapsets/discussions"))
     }
 
     @Test

@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.twig.data.Markup
 import app.twig.data.Node
 import app.twig.data.Store
 
@@ -48,7 +49,7 @@ private fun SearchResult(n: Node, terms: List<String>, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val text = n.plain.ifEmpty { n.url.orEmpty() }
     val accent = cs.primary
-    val annotated = remember(text, terms, accent) { highlight(text, terms, accent) }
+    val annotated = remember(text, terms, accent) { highlight(Markup.styled(text), terms, accent) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -68,8 +69,9 @@ private fun SearchResult(n: Node, terms: List<String>, onClick: () -> Unit) {
     }
 }
 
-private fun highlight(text: String, terms: List<String>, color: Color): AnnotatedString = buildAnnotatedString {
-    append(text)
+private fun highlight(shown: AnnotatedString, terms: List<String>, color: Color): AnnotatedString = buildAnnotatedString {
+    append(shown)
+    val text = shown.text
     for (t in terms) {
         var i = text.indexOf(t, ignoreCase = true)
         while (i >= 0) {

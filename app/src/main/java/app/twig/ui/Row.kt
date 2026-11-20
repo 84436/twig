@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -34,15 +35,16 @@ import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
@@ -92,7 +94,10 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.twig.data.Markup
+import app.twig.data.SwipeAction
 import app.twig.data.Node
 import app.twig.data.Store
 import app.twig.share.Glyph
@@ -100,13 +105,17 @@ import app.twig.share.Sites
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
+import kotlin.math.sign
 
 internal val BULLET_W = 30.dp
-internal val LINE_BOX = 38.dp
 internal val START_PAD = 6.dp
-private val SWIPE_DONE = 76.dp
+private val SWIPE_GO = 76.dp
 private val REVEAL = 88.dp
 private const val LONG_PRESS_MS = 280L
+
+/** Height of a row's first line, so the dot sits on it at any text size. */
+@Composable
+internal fun lineBox(): Dp = with(LocalDensity.current) { MaterialTheme.typography.bodyLarge.lineHeight.toDp() } + 14.dp
 
 enum class MenuAction { MoveTo, Select, Copy, Share }
 
@@ -119,10 +128,17 @@ interface RowActions {
     fun menu(node: Node, action: MenuAction)
 }
 
+private fun swipeIcon(a: SwipeAction, done: Boolean) = when (a) {
+    SwipeAction.Done -> if (done) Ic.Undo else Ic.Check
+    SwipeAction.Select -> Ic.CheckCircle
+    SwipeAction.Move -> Ic.Move
+    else -> Ic.Delete
+}
+
 /**
- * One bullet on a page. A plain bullet is edited in place; a list (a bullet with bullets in it)
- * opens when tapped. Swipe right to complete, swipe left to uncover Delete. In batch mode
- * ([selected] not null) a tap selects.
+ * One bullet on a page; a list is a bullet with bullets in it. Tap the text to edit, the dot or a
+ * list's › to open. Swipes do what Settings says (Delete uncovers a button instead of deleting).
+ * In batch mode ([selected] not null) a tap selects; in read-only mode a tap on a list opens it.
  */
 @Composable
 fun BulletRow(
@@ -134,6 +150,7 @@ fun BulletRow(
     dragged: Boolean,
     menuOpen: Boolean,
     selected: Boolean?,
+    readOnly: Boolean,
     actions: RowActions,
     modifier: Modifier = Modifier,
 ) {
@@ -141,9 +158,10 @@ fun BulletRow(
     val isList = kids > 0
     val selecting = selected != null
     val density = LocalDensity.current
-    val threshold = with(density) { SWIPE_DONE.toPx() }
+    val go = with(density) { SWIPE_GO.toPx() }
     val reveal = with(density) { REVEAL.toPx() }
     val flingPx = with(density) { 900.dp.toPx() } // per second
+    val linePx = with(density) { lineBox().toPx() }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val swipe = remember { Animatable(0f) }
@@ -153,32 +171,40 @@ fun BulletRow(
     LaunchedEffect(revealed) {
         if (!revealed && swipe.value != 0f) swipe.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
     }
-    if (!isList) EditSession(node, editing)
+    EditSession(node, editing)
+    val right = Store.swipeRight
+    val left = Store.swipeLeft
     val bg by animateColorAsState(
         if (highlighted || selected == true) cs.primary.copy(alpha = 0.16f) else cs.primary.copy(alpha = 0f),
         tween(if (highlighted || selected == true) 120 else 900),
         label = "hl",
     )
-    val doneIcon = rememberVectorPainter(if (node.done) Ic.Undo else Ic.Check)
+    val rightIcon = rememberVectorPainter(swipeIcon(right, node.done))
+    val leftIcon = rememberVectorPainter(swipeIcon(left, node.done))
     val idle = cs.surfaceContainerHighest
-    val go = cs.primary
+    val goColor = cs.primary
     val idleInk = cs.onSurfaceVariant
     val goInk = cs.onPrimary
+
+    fun band(r: Float, limit: Float) = if (abs(r) <= limit) r else sign(r) * (limit + (abs(r) - limit) * 0.35f)
 
     Box(
         modifier
             .fillMaxWidth()
             .testTag("row-${node.id}")
             .drawBehind {
+                // the strip a non-delete swipe uncovers, from the edge it started at
                 val x = swipe.value
-                if (x <= 0f) return@drawBehind
-                val on = x >= threshold
-                val x0 = START_PAD.toPx()
-                drawRect(if (on) go else idle, topLeft = Offset(x0, 0f), size = Size(x, size.height))
+                val act = if (x > 0) right else left
+                if (x == 0f || act == SwipeAction.Delete || act == SwipeAction.None) return@drawBehind
+                val w = abs(x)
+                val on = w >= go
+                drawRect(if (on) goColor else idle, topLeft = Offset(if (x > 0) 0f else size.width - w, 0f), size = Size(w, size.height))
                 val icon = 22.dp.toPx()
-                if (x > 14.dp.toPx() + icon) {
-                    translate(x0 + 14.dp.toPx(), (LINE_BOX.toPx() - icon) / 2) {
-                        with(doneIcon) { draw(Size(icon, icon), colorFilter = ColorFilter.tint(if (on) goInk else idleInk)) }
+                val pad = 14.dp.toPx()
+                if (w > pad + icon) {
+                    translate(if (x > 0) pad else size.width - pad - icon, (linePx - icon) / 2) {
+                        with(if (x > 0) rightIcon else leftIcon) { draw(Size(icon, icon), colorFilter = ColorFilter.tint(if (on) goInk else idleInk)) }
                     }
                 }
             }
@@ -188,21 +214,23 @@ fun BulletRow(
                         .clickable { Store.selection?.let { s -> Store.selection = if (node.id in s) s - node.id else s + node.id } }
                         .semantics { stateDescription = if (selected == true) "Selected" else "Not selected" }
                 } else {
-                    Modifier.pointerInput(node.id, actions) {
+                    Modifier.pointerInput(node.id, actions, right, left) {
                         swipeRow(
+                            allow = { dx -> Store.revealedId == node.id || (if (dx > 0) right else left) != SwipeAction.None },
                             onStart = {
-                                base[0] = if (Store.revealedId == node.id) -reveal else 0f
+                                base[0] = if (Store.revealedId == node.id) sign(swipe.targetValue) * reveal else 0f
                                 if (base[0] == 0f) Store.revealedId = null
                             },
                             onMove = { dx ->
                                 val raw = base[0] + dx
+                                val act = if (raw > 0) right else left
                                 val v = when {
-                                    base[0] < 0f -> raw.coerceAtMost(0f)
-                                    raw > threshold -> threshold + (raw - threshold) * 0.35f
-                                    raw < -reveal -> -reveal + (raw + reveal) * 0.35f
-                                    else -> raw
+                                    base[0] > 0f -> band(raw.coerceAtLeast(0f), reveal)
+                                    base[0] < 0f -> band(raw.coerceAtMost(0f), reveal)
+                                    act == SwipeAction.None -> 0f
+                                    else -> band(raw, if (act == SwipeAction.Delete) reveal else go)
                                 }
-                                val on = base[0] == 0f && raw >= threshold
+                                val on = base[0] == 0f && act != SwipeAction.Delete && act != SwipeAction.None && abs(raw) >= go
                                 if (on != armed[0]) {
                                     armed[0] = on
                                     if (on) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -212,16 +240,26 @@ fun BulletRow(
                             onEnd = { dx, vx ->
                                 armed[0] = false
                                 val raw = base[0] + dx
+                                val s = sign(if (base[0] != 0f) base[0] else raw)
+                                val act = if (s > 0) right else left
+                                val out = abs(if (s > 0) raw.coerceAtLeast(0f) else raw.coerceAtMost(0f)) // on its own side only
+                                val flungOut = vx * s > flingPx
+                                val flungBack = vx * s < -flingPx
                                 val target = when {
-                                    base[0] == 0f && (raw >= threshold || (raw >= threshold * 0.5f && vx > flingPx)) -> {
+                                    base[0] != 0f -> if (out > reveal / 2 && !flungBack) base[0] else 0f
+                                    act == SwipeAction.Delete -> if ((out > reveal / 2 && !flungBack) || (out > 0f && flungOut)) s * reveal else 0f
+                                    act != SwipeAction.None && (out >= go || (out >= go / 2 && flungOut)) -> {
                                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        Store.toggleDone(node)
+                                        when (act) {
+                                            SwipeAction.Done -> Store.toggleDone(node)
+                                            SwipeAction.Select -> Store.selection = setOf(node.id)
+                                            else -> actions.menu(node, MenuAction.MoveTo)
+                                        }
                                         0f
                                     }
-                                    raw < -reveal / 2 && vx < flingPx || raw < 0f && vx < -flingPx -> -reveal
                                     else -> 0f
                                 }
-                                Store.revealedId = if (target < 0f) node.id else Store.revealedId.takeIf { it != node.id }
+                                Store.revealedId = if (target != 0f) node.id else Store.revealedId.takeIf { it != node.id }
                                 scope.launch { swipe.animateTo(target, spring(stiffness = Spring.StiffnessMediumLow)) }
                             },
                         )
@@ -243,44 +281,53 @@ fun BulletRow(
                         Modifier.background(bg)
                     }
                 )
-                .then(if (isList && !selecting) Modifier.pressGestures(node, { Store.zoom = node }, actions) else Modifier)
-                .padding(start = START_PAD, end = 12.dp),
+                .then(if (readOnly && isList && !selecting) Modifier.clickable { Store.zoom = node } else Modifier)
+                .padding(start = START_PAD, end = 4.dp),
             verticalAlignment = Alignment.Top,
         ) {
             Dot(node, isList, canOpen, selected, menuOpen, actions)
             Column(Modifier.weight(1f).padding(vertical = 7.dp)) {
-                if (isList || selecting) {
-                    Text(node.plain, style = textStyle(node.done), modifier = Modifier.testTag("label-${node.id}"))
+                if (selecting || readOnly) {
+                    val raw = node.plain
+                    Text(remember(raw) { Markup.styled(raw) }, style = textStyle(node.done), modifier = Modifier.testTag("label-${node.id}"))
                 } else {
-                    NodeText(node, canOpen, actions)
+                    NodeText(node, editing, canOpen, actions)
                 }
                 val url = node.url
-                if (editing && !isList && !selecting) UrlField(node)
+                if (!selecting && !readOnly && Store.urlFor == node.id) UrlField(node)
                 else if (!url.isNullOrBlank()) LinkLine(url, enabled = !selecting)
             }
             if (isList) {
-                Text(
-                    "$kids  ›",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = cs.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 8.dp, top = 10.dp),
-                )
+                Row(
+                    Modifier
+                        .height(lineBox())
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(enabled = !selecting) { Store.zoom = node }
+                        .padding(start = 10.dp, end = 6.dp)
+                        .testTag("open-${node.id}"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("$kids", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
+                    Icon(Ic.ChevronRight, "Open", Modifier.size(20.dp), tint = cs.onSurfaceVariant)
+                }
+            } else {
+                Spacer(Modifier.width(8.dp))
             }
         }
     }
 }
 
-/** Uncovered by swiping left; grows with the swipe. Tapping it is the only way to delete a bullet. */
+/** Uncovered by a Delete swipe; grows with the swipe. Tapping it is the only way to delete a bullet. */
 @Composable
 private fun BoxScope.DeleteButton(node: Node, offset: () -> Float) {
     val x = offset()
-    if (x >= 0f) return
+    if (x == 0f || (if (x > 0) Store.swipeRight else Store.swipeLeft) != SwipeAction.Delete) return
     val cs = MaterialTheme.colorScheme
-    Box(Modifier.matchParentSize(), contentAlignment = Alignment.CenterEnd) {
+    Box(Modifier.matchParentSize(), contentAlignment = if (x > 0) Alignment.CenterStart else Alignment.CenterEnd) {
         Column(
             Modifier
                 .fillMaxHeight()
-                .width(with(LocalDensity.current) { (-x).toDp() })
+                .width(with(LocalDensity.current) { abs(x).toDp() })
                 .clipToBounds()
                 .background(cs.error)
                 .clickable { Store.delete(listOf(node)) }
@@ -316,14 +363,13 @@ private fun Dot(node: Node, isList: Boolean, canOpen: Boolean, selected: Boolean
     val onPrimary = cs.onPrimary
     val primary = cs.primary
     val outline = cs.outline
+    val fetching = node.id in Store.fetching
     Box(
         Modifier
-            .size(BULLET_W, LINE_BOX)
+            .size(BULLET_W, lineBox())
             .testTag("bullet-${node.id}")
-            .then(
-                if (selected == null && !isList) Modifier.pressGestures(node, if (canOpen) ({ Store.zoom = node }) else null, actions)
-                else Modifier
-            )
+            // read-only: only real lists open, there's nothing to add to an empty one
+            .then(if (selected == null) Modifier.pressGestures(node, if (canOpen && (isList || !Store.readOnly)) ({ Store.zoom = node }) else null, actions) else Modifier)
             .drawBehind {
                 when (selected) {
                     true -> {
@@ -334,14 +380,16 @@ private fun Dot(node: Node, isList: Boolean, canOpen: Boolean, selected: Boolean
                         }
                     }
                     false -> drawCircle(outline, radius = 9.dp.toPx(), style = Stroke(1.5.dp.toPx()))
-                    null -> {
+                    null -> if (!fetching) {
                         val alpha = if (node.done) 0.4f else 1f
                         if (isList) drawCircle(ring, radius = 9.dp.toPx(), alpha = alpha)
                         drawCircle(dot, radius = 3.5.dp.toPx(), alpha = alpha)
                     }
                 }
-            }
+            },
+        contentAlignment = Alignment.Center,
     ) {
+        if (fetching) CircularProgressIndicator(Modifier.size(14.dp).testTag("fetching-${node.id}"), strokeWidth = 2.dp)
         DropdownMenu(expanded = menuOpen, onDismissRequest = actions::menuDismiss) {
             MenuItem("Move to…", Ic.Move) { actions.menu(node, MenuAction.MoveTo) }
             MenuItem("Select", Ic.CheckCircle) { actions.menu(node, MenuAction.Select) }
@@ -361,7 +409,7 @@ internal fun MenuItem(text: String, icon: ImageVector, onClick: () -> Unit) {
 }
 
 @Composable
-private fun NodeText(node: Node, canOpen: Boolean, actions: RowActions) {
+private fun NodeText(node: Node, editing: Boolean, canOpen: Boolean, actions: RowActions) {
     val cs = MaterialTheme.colorScheme
     val fr = remember { FocusRequester() }
     val focus = LocalFocusManager.current
@@ -389,6 +437,7 @@ private fun NodeText(node: Node, canOpen: Boolean, actions: RowActions) {
             },
         textStyle = textStyle(node.done),
         inputTransformation = transformation,
+        outputTransformation = Markup.output(editing),
         lineLimits = TextFieldLineLimits.MultiLine(),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         cursorBrush = SolidColor(cs.primary),
@@ -458,12 +507,13 @@ internal fun TrackFocusAndEdits(node: Node, fr: FocusRequester) {
     }
 }
 
-/** The bullet's URL, editable. Shown under the text while the bullet is being edited. */
+/** The bullet's URL, editable. Opened from the keyboard bar; takes the cursor when it opens. */
 @Composable
 internal fun UrlField(node: Node) {
     val cs = MaterialTheme.colorScheme
     val state = remember(node.id) { TextFieldState(node.url.orEmpty()) }
-    val focus = LocalFocusManager.current
+    val fr = remember { FocusRequester() }
+    LaunchedEffect(node.id) { runCatching { fr.requestFocus() } }
     LaunchedEffect(node.id) {
         var first = true
         snapshotFlow { state.text.toString() }.collect {
@@ -476,13 +526,14 @@ internal fun UrlField(node: Node) {
         }
     }
     val style = MaterialTheme.typography.bodyMedium.copy(color = cs.primary)
-    Row(Modifier.padding(top = 2.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Icon(Ic.Link, null, Modifier.size(16.dp), tint = cs.onSurfaceVariant)
         BasicTextField(
             state = state,
             modifier = Modifier
                 .weight(1f)
-                .padding(horizontal = 8.dp, vertical = 8.dp)
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .focusRequester(fr)
                 .trackFocus(node)
                 .testTag("url-${node.id}"),
             textStyle = style,
@@ -494,11 +545,11 @@ internal fun UrlField(node: Node) {
                 autoCorrectEnabled = false,
                 capitalization = KeyboardCapitalization.None,
             ),
-            onKeyboardAction = { focus.clearFocus() },
+            onKeyboardAction = { Store.closeUrl(node) },
             cursorBrush = SolidColor(cs.primary),
             decorator = { inner ->
                 Box {
-                    if (state.text.isEmpty()) Text("Add URL", style = style, color = cs.onSurfaceVariant.copy(alpha = 0.7f), maxLines = 1)
+                    if (state.text.isEmpty()) Text("Paste or type a URL", style = style, color = cs.onSurfaceVariant.copy(alpha = 0.7f), maxLines = 1)
                     inner()
                 }
             },
@@ -518,13 +569,19 @@ internal fun UrlField(node: Node) {
     }
 }
 
-/** Icon and short text for a URL: "YouTube", "84436/twig", or the host. */
+/** Icon and short text for a URL: "YouTube video", "84436/twig", "Beatmap", or the host. */
 @Composable
 fun LinkLabel(url: String, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     val look = remember(url) { Sites.look(url) }
+    val icon = when (look.glyph) {
+        Glyph.YouTube -> Ic.YouTube
+        Glyph.GitHub -> Ic.GitHub
+        Glyph.Cookie -> Ic.Cookie
+        Glyph.Link -> Ic.Link
+    }
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Icon(if (look.glyph == Glyph.Play) Ic.Play else Ic.Link, null, Modifier.size(15.dp), tint = cs.primary)
+        Icon(icon, null, Modifier.size(15.dp), tint = cs.primary)
         Spacer(Modifier.width(5.dp))
         Text(look.text, style = MaterialTheme.typography.labelMedium, color = cs.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -582,6 +639,7 @@ class SplitOnNewline(private val onSplit: (String, List<String>, String) -> Unit
  * distance + velocity on release. Vertical swipes are left alone so the list scrolls.
  */
 suspend fun PointerInputScope.swipeRow(
+    allow: (dx: Float) -> Boolean,
     onStart: () -> Unit,
     onMove: (dx: Float) -> Unit,
     onEnd: (dx: Float, velocityX: Float) -> Unit,
@@ -598,7 +656,7 @@ suspend fun PointerInputScope.swipeRow(
         if (!ch.pressed || ch.isConsumed) return@awaitEachGesture
         total += ch.positionChange()
         if (total.getDistance() > slop) {
-            if (abs(total.x) <= abs(total.y) * 1.5f) return@awaitEachGesture
+            if (abs(total.x) <= abs(total.y) * 1.5f || !allow(total.x)) return@awaitEachGesture
             ch.consume()
             break
         }

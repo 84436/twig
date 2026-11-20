@@ -45,6 +45,17 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performImeAction
+import androidx.compose.ui.test.performTextInputSelection
+import androidx.compose.ui.text.TextRange
+import app.twig.data.SwipeAction
+import java.util.concurrent.CountDownLatch
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.graphics.Insets
+import androidx.compose.ui.test.assertIsNotFocused
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -109,6 +120,12 @@ class UiTest {
         rule.waitForIdle()
     }
 
+    /** Stop editing, the way opening search does. */
+    private fun leave() {
+        click("openSearch")
+        click("closeSearch")
+    }
+
     private fun longPressRelease(tag: String) {
         rule.onNodeWithTag(tag).performTouchInput {
             down(center)
@@ -133,29 +150,41 @@ class UiTest {
         rule.waitForIdle()
     }
 
-    private fun openBucket() = click("row-${bucket.id}")
+    private fun openBucket() = click("open-${bucket.id}")
 
     @Test
     fun homeShowsListsLikeFolders() {
-        rule.onNodeWithTag("label-${welcome.id}").assertExists()
-        rule.onNodeWithText("3  ›").assertExists() // Bucket list holds 3
-        rule.onNodeWithTag("searchBar").assertExists()
+        rule.onNodeWithTag("crumb-0").assertExists()
+        rule.onNodeWithTag("open-${bucket.id}").assert(hasText("3"))
         rule.onNodeWithText("Add bullet").assertExists()
         rule.shot("01-home")
     }
 
     @Test
-    fun tapListOpensAndBackReturns() {
-        click("row-${welcome.id}")
+    fun openFromChevronOrDotAndGoBack() {
+        click("open-${welcome.id}")
         assertSame(welcome, Store.zoom)
-        rule.onNodeWithTag("header").assertExists()
+        rule.onNodeWithTag("crumb-${welcome.id}").assertExists()
         rule.shot("02-list")
-        click("searchBack")
+        click("crumb-0") // the path is a way back too
         assertSame(Store.root, Store.zoom)
-        click("row-${welcome.id}")
+        click("bullet-${welcome.id}")
+        assertSame(welcome, Store.zoom)
+        click("back")
+        assertSame(Store.root, Store.zoom)
+        assertNull(Store.highlightId) // no flash on the list you came from
+        click("bullet-${welcome.id}")
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.waitForIdle()
         assertSame(Store.root, Store.zoom)
+    }
+
+    @Test
+    fun tappingAListsTextEditsIt() {
+        click("text-${welcome.id}")
+        assertSame(Store.root, Store.zoom)
+        assertEquals(welcome.id, Store.focusedId)
+        rule.onNodeWithTag("toolbar").assertExists()
     }
 
     @Test
@@ -167,11 +196,10 @@ class UiTest {
         assertSame(movies, Store.zoom)
         click("addBullet")
         rule.onNode(isFocused()).performTextInput("Dune")
-        click("searchBack")
-        rule.onNodeWithTag("label-${movies.id}").assertExists()
-        assertEquals("Dune", movies.children.single().plain)
+        click("back")
+        rule.onNodeWithTag("open-${movies.id}").assertExists()
         // one more level, and that's it
-        click("row-${movies.id}")
+        click("open-${movies.id}")
         val dune = byText("Dune")
         click("bullet-${dune.id}")
         assertSame(dune, Store.zoom)
@@ -206,6 +234,27 @@ class UiTest {
         rule.waitForIdle()
         assertNull(Store.focusedId)
         assertEquals(listOf("A", "B"), bucket.children.drop(3).map { it.plain })
+    }
+
+    @Test
+    fun hidingTheKeyboardEndsEditing() {
+        openBucket()
+        click("text-${lights.id}")
+        val view = rule.activity.window.decorView
+        fun ime(visible: Boolean) = rule.runOnUiThread {
+            val insets = WindowInsetsCompat.Builder()
+                .setInsets(WindowInsetsCompat.Type.ime(), Insets.of(0, 0, 0, if (visible) 900 else 0))
+                .setVisible(WindowInsetsCompat.Type.ime(), visible)
+                .build()
+            ViewCompat.dispatchApplyWindowInsets(view, insets)
+        }
+        ime(true)
+        rule.waitForIdle()
+        assertEquals(lights.id, Store.focusedId)
+        ime(false)
+        rule.waitForIdle()
+        assertNull(Store.focusedId)
+        rule.onNodeWithTag("toolbar").assertDoesNotExist()
     }
 
     @Test
@@ -245,8 +294,6 @@ class UiTest {
         rule.shot("05-swipe-delete")
         click("delete-${n.id}")
         assertFalse(Store.isAlive(n))
-        rule.onNodeWithText("Undo").assertExists()
-        rule.shot("06-undo")
         rule.onNodeWithText("Undo").performClick()
         rule.waitForIdle()
         assertTrue(Store.isAlive(n))
@@ -254,6 +301,35 @@ class UiTest {
         swipe("text-${n.id}", -32f)
         swipe("text-${pasta.id}", -32f)
         assertEquals(pasta.id, Store.revealedId)
+    }
+
+    @Test
+    fun swipesDoWhatSettingsSay() {
+        openBucket()
+        rule.runOnIdle {
+            Store.swipeRight = SwipeAction.Select
+            Store.swipeLeft = SwipeAction.Move
+        }
+        swipe("text-${lights.id}", 32f)
+        assertEquals(setOf(lights.id), Store.selection)
+        click("batch-Done") // and batch mode takes it from there
+        assertTrue(lights.done)
+        rule.runOnIdle { Store.selection = null }
+        swipe("text-${pasta.id}", -32f)
+        rule.onNodeWithText("Move “Learn to make fresh pasta”").assertExists()
+        click("dest-${welcome.id}")
+        assertSame(welcome, pasta.parent)
+        // Delete can sit on the right too, and Nothing means nothing
+        rule.runOnIdle {
+            Store.swipeRight = SwipeAction.Delete
+            Store.swipeLeft = SwipeAction.None
+        }
+        swipe("text-${lights.id}", -32f)
+        rule.onNodeWithTag("delete-${lights.id}").assertDoesNotExist()
+        assertNull(Store.selection)
+        swipe("text-${lights.id}", 32f)
+        click("delete-${lights.id}")
+        assertFalse(Store.allNodes().any { it.plain == "See the northern lights" })
     }
 
     @Test
@@ -270,14 +346,14 @@ class UiTest {
             }
         }
         rule.mainClock.advanceTimeBy(400)
-        drawWindows("07-dragging")
+        drawWindows("06-dragging")
         rule.onNodeWithTag("bullet-${n.id}").performTouchInput { up() }
         rule.mainClock.autoAdvance = true
         rule.waitForIdle()
         assertSame(n, bucket.children.first())
-        click("searchBack")
+        click("back")
         val b = bucket
-        rule.onNodeWithTag("row-${b.id}").performTouchInput {
+        rule.onNodeWithTag("bullet-${b.id}").performTouchInput {
             down(center)
             advanceEventTime(450)
             repeat(10) {
@@ -297,36 +373,17 @@ class UiTest {
         val n = lights
         longPressRelease("bullet-${n.id}")
         rule.onNodeWithText("Select").assertExists()
-        rule.shot("08-menu")
+        rule.shot("07-menu")
         rule.onNodeWithText("Move to…").performClick()
         rule.waitForIdle()
         rule.onNodeWithTag("pickerField").assertIsFocused()
-        rule.shot("09-move")
-        click("dest-${welcome.id}")
-        assertSame(welcome, n.parent)
-        rule.onNodeWithText("Moved to Welcome to Twig").assertExists()
+        rule.shot("08-move")
+        click("dest-0") // Home is a place too
+        assertSame(Store.root, n.parent)
+        rule.onNodeWithText("Moved to Home").assertExists()
         rule.onNodeWithText("Undo").performClick()
         rule.waitForIdle()
         assertSame(bucket, n.parent)
-    }
-
-    @Test
-    fun countsFollowMovesOnTheSamePage() {
-        lateinit var loose: Node
-        rule.runOnIdle { loose = Store.create(Store.root, 2, "loose") }
-        rule.waitForIdle()
-        rule.onNodeWithText("3  ›").assertExists()
-        rule.runOnIdle { Store.move(listOf(loose), bucket) }
-        rule.waitForIdle()
-        rule.onNodeWithText("4  ›").assertExists()
-        rule.onNodeWithText("Undo").performClick()
-        rule.waitForIdle()
-        rule.onNodeWithText("3  ›").assertExists()
-        // a bullet that gets its first bullet turns into a list row right away
-        rule.runOnIdle { Store.move(listOf(byText("Learn to make fresh pasta")), loose) }
-        rule.waitForIdle()
-        rule.onNodeWithTag("label-${loose.id}").assertExists()
-        rule.onNodeWithText("2  ›").assertExists()
     }
 
     @Test
@@ -337,7 +394,7 @@ class UiTest {
             Store.create(deep, 0, "item")
         }
         rule.waitForIdle()
-        longPressRelease("row-${bucket.id}")
+        longPressRelease("bullet-${bucket.id}")
         rule.onNodeWithText("Move to…").performClick()
         rule.waitForIdle()
         rule.onNodeWithTag("dest-${welcome.id}").assertExists()
@@ -345,6 +402,23 @@ class UiTest {
         rule.onNodeWithTag("dest-${bucket.id}").assertDoesNotExist() // not into itself
         click("dest-${welcome.id}")
         assertSame(welcome, bucket.parent)
+    }
+
+    @Test
+    fun countsFollowMovesOnTheSamePage() {
+        lateinit var loose: Node
+        rule.runOnIdle { loose = Store.create(Store.root, 2, "loose") }
+        rule.waitForIdle()
+        rule.runOnIdle { Store.move(listOf(loose), bucket) }
+        rule.waitForIdle()
+        rule.onNodeWithTag("open-${bucket.id}").assert(hasText("4"))
+        rule.onNodeWithText("Undo").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("open-${bucket.id}").assert(hasText("3"))
+        // a bullet that gets its first bullet shows its › right away
+        rule.runOnIdle { Store.move(listOf(byText("Learn to make fresh pasta")), loose) }
+        rule.waitForIdle()
+        rule.onNodeWithTag("open-${loose.id}").assert(hasText("1"))
     }
 
     @Test
@@ -357,7 +431,7 @@ class UiTest {
         click("row-${pasta.id}")
         rule.onNodeWithText("2 selected").assertExists()
         assertNull(Store.focusedId) // selecting, not editing
-        rule.shot("10-select")
+        rule.shot("09-select")
         click("batch-Done")
         assertTrue(lights.done && pasta.done)
         click("batch-Undone")
@@ -371,24 +445,66 @@ class UiTest {
         click("dest-${welcome.id}")
         assertSame(welcome, pasta.parent)
         assertNull(Store.selection)
-        rule.onNodeWithText("Moved 2 to Welcome to Twig").assertExists()
         menu("Select")
         rule.onNodeWithText("All").performClick()
         click("batch-Delete")
         assertTrue(bucket.children.isEmpty())
         assertNull(Store.selection)
-        rule.onNodeWithText("Deleted “See the northern lights”").assertExists()
     }
 
     @Test
-    fun shareTargetSetting() {
-        menu("Save shared items to…")
-        rule.shot("11-share-target")
-        click("target-${bucket.id}")
-        assertSame(bucket, Store.shareTarget)
-        menu("Save shared items to…")
-        click("target-ask")
-        assertNull(Store.shareTarget)
+    fun sortWithUndo() {
+        openBucket()
+        menu("Sort A–Z")
+        assertEquals(listOf("Find a note app that isn't annoying", "Learn to make fresh pasta", "See the northern lights"), bucket.children.map { it.plain })
+        menu("Sort Z–A")
+        assertEquals("See the northern lights", bucket.children.first().plain)
+        rule.onNodeWithText("Undo").performClick()
+        rule.waitForIdle()
+        assertEquals("Find a note app that isn't annoying", bucket.children.first().plain)
+    }
+
+    @Test
+    fun readOnlyMode() {
+        menu("Read-only")
+        assertTrue(Store.readOnly)
+        rule.onNodeWithTag("addBullet").assertDoesNotExist()
+        rule.onNodeWithTag("text-${bucket.id}").assertDoesNotExist() // nothing to type in
+        rule.shot("10-read-only")
+        click("row-${bucket.id}") // a tap on a list opens it
+        assertSame(bucket, Store.zoom)
+        click("label-${lights.id}")
+        assertNull(Store.focusedId)
+        swipe("label-${lights.id}", 32f) // swipes still work
+        assertTrue(lights.done)
+        click("bullet-${lights.id}") // an empty bullet doesn't open
+        assertSame(bucket, Store.zoom)
+        menu("Read-only")
+        assertFalse(Store.readOnly)
+        rule.onNodeWithTag("addBullet").assertExists()
+        menu("Read-only")
+        click("readOnlyOff") // the lock in the bar turns it off too
+        assertFalse(Store.readOnly)
+    }
+
+    @Test
+    fun settingsSheet() {
+        menu("Settings")
+        rule.onNodeWithTag("settings").assertExists()
+        rule.shot("11-settings")
+        click("size-20")
+        assertEquals(20, Store.textSize)
+        click("font-mono")
+        assertTrue(Store.monospace)
+        click("left-Select")
+        assertEquals(SwipeAction.Select, Store.swipeLeft)
+        click("shareTarget")
+        click("target-0")
+        assertSame(Store.root, Store.shareTarget)
+        rule.onNodeWithTag("shareTarget").assert(hasText("Home"))
+        rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        rule.waitForIdle()
+        rule.shot("12-big-mono")
     }
 
     @Test
@@ -402,7 +518,6 @@ class UiTest {
         setClipboard("- One\n  - [Two](https://github.com/84436/twig)\n- ~~Three~~")
         menu("Replace all from clipboard")
         rule.onNodeWithText("Replace everything?").assertExists()
-        rule.shot("12-import")
         click("confirmImport")
         assertEquals(listOf("One", "Three"), Store.root.children.map { it.plain })
         assertTrue(Store.root.children[1].done)
@@ -413,57 +528,125 @@ class UiTest {
     }
 
     @Test
-    fun urlFieldAddEditRemove() {
+    fun urlFromTheKeyboardBar() {
         openBucket()
         val n = lights
         click("text-${n.id}")
-        rule.onNodeWithTag("url-${n.id}").assertExists()
-        rule.onNodeWithText("Add URL").assertExists()
-        rule.shot("13-editing")
+        rule.onNodeWithTag("url-${n.id}").assertDoesNotExist() // no field until asked: the list stays put
+        click("tool-Add URL")
+        rule.onNodeWithTag("url-${n.id}").assertIsFocused()
+        rule.shot("13-url")
         rule.onNodeWithTag("url-${n.id}").performTextInput("Example.com/aurora")
+        rule.onNodeWithTag("url-${n.id}").performImeAction() // Done: back to the text
         rule.waitForIdle()
-        click("searchField") // leave the bullet
+        rule.onNodeWithTag("url-${n.id}").assertDoesNotExist()
+        rule.onNodeWithTag("text-${n.id}").assertIsFocused()
+        leave()
         assertEquals("https://Example.com/aurora", n.url)
         rule.onNodeWithText("example.com").assertExists()
         rule.onNodeWithTag("link-${n.url}").performTouchInput { longClick() }
         rule.waitForIdle()
         assertEquals("https://Example.com/aurora", clipboard())
-        // the field is there to change or clear it again
         click("text-${n.id}")
+        click("tool-Edit URL")
         click("clearUrl-${n.id}")
-        click("searchField")
+        leave()
         assertNull(n.url)
+    }
+
+    @Test
+    fun keyboardBarMovesBoldsAndCompletes() {
+        openBucket()
+        val n = lights
         click("text-${n.id}")
-        rule.onNodeWithText("Add URL").assertExists()
+        click("tool-Move up")
+        assertSame(n, bucket.children[0])
+        rule.onNodeWithTag("text-${n.id}").assertIsFocused() // still typing in it
+        click("tool-Move down")
+        assertSame(n, bucket.children[1])
+        click("tool-Mark done")
+        assertTrue(n.done)
+        click("tool-Mark not done")
+        assertFalse(n.done)
+        rule.onNodeWithTag("text-${n.id}").performTextInputSelection(TextRange(0, 3))
+        click("tool-Bold")
+        assertEquals("**See** the northern lights", n.plain)
+        rule.shot("14-bold-editing")
+        leave()
+        rule.shot("15-bold")
+        click("text-${n.id}")
+        click("tool-Move to…")
+        click("dest-${welcome.id}")
+        assertSame(welcome, n.parent)
+    }
+
+    @Test
+    fun pageTitleTakesTwoTaps() {
+        openBucket()
+        val n = lights
+        val gate = CountDownLatch(1)
+        rule.runOnIdle {
+            n.url = "https://example.com/aurora"
+            Store.fetchTitle = {
+                gate.await()
+                "Aurora forecast"
+            }
+        }
+        click("text-${n.id}")
+        click("tool-Use page title")
+        rule.onNodeWithText("Replace text?").assertExists()
+        assertTrue(Store.fetching.isEmpty()) // one tap does nothing yet
+        click("tool-Use page title")
+        rule.onNodeWithTag("fetching-${n.id}").assertExists()
+        rule.shot("16-fetching")
+        gate.countDown()
+        repeat(200) {
+            if (n.id in Store.fetching) {
+                Thread.sleep(10)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+        }
+        rule.waitForIdle()
+        assertEquals("Aurora forecast", n.plain)
+        rule.onNodeWithTag("fetching-${n.id}").assertDoesNotExist()
     }
 
     @Test
     fun siteSpecificLinks() {
         rule.runOnIdle {
             Store.create(bucket, 0, "Never Gonna Give You Up", "https://youtu.be/dQw4w9WgXcQ")
-            Store.create(bucket, 1, "Twig", "https://github.com/84436/twig")
-            Store.create(bucket, 2, "Twig releases", "https://github.com/84436/twig/releases")
-            Store.create(bucket, 3, "A post", "https://www.example.com/post")
+            Store.create(bucket, 1, "A channel", "https://www.youtube.com/@channel")
+            Store.create(bucket, 2, "A playlist", "https://www.youtube.com/playlist?list=PL1")
+            Store.create(bucket, 3, "Twig", "https://github.com/84436/twig")
+            Store.create(bucket, 4, "Twig releases", "https://github.com/84436/twig/releases")
+            Store.create(bucket, 5, "A map", "https://osu.ppy.sh/beatmapsets/1234#osu/5678")
+            Store.create(bucket, 6, "A post", "https://www.example.com/post")
         }
         openBucket()
-        rule.onNodeWithText("YouTube").assertExists()
-        rule.onNodeWithText("84436/twig").assertExists()
-        rule.onNodeWithText("github.com").assertExists()
-        rule.onNodeWithText("example.com").assertExists()
-        rule.shot("14-links")
+        for (t in listOf("YouTube video", "YouTube channel", "YouTube playlist", "84436/twig", "github.com", "Beatmap", "example.com")) {
+            rule.onNodeWithText(t).assertExists()
+        }
+        rule.shot("17-links")
     }
 
     @Test
-    fun searchFindsAndJumps() {
+    fun searchIsItsOwnScreen() {
+        click("openSearch")
+        rule.onNodeWithTag("searchField").assertIsFocused()
+        rule.onNodeWithTag("page").assertDoesNotExist()
         rule.onNodeWithTag("searchField").performTextInput("pasta")
         rule.waitForIdle()
         rule.onNodeWithText("1 found").assertExists()
-        rule.shot("15-search")
+        rule.shot("18-search")
         rule.onNodeWithText("Learn to make fresh pasta").performClick()
         rule.waitForIdle()
         assertSame(bucket, Store.zoom)
-        rule.onNodeWithTag("results").assertDoesNotExist()
-        rule.onNodeWithText("Search").assertExists()
+        rule.onNodeWithTag("searchField").assertDoesNotExist()
+        click("openSearch")
+        rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        rule.waitForIdle()
+        rule.onNodeWithTag("page").assertExists()
+        assertSame(bucket, Store.zoom) // Back closed search, didn't go up
     }
 
     @Test
@@ -495,9 +678,9 @@ class DarkUiTest {
 
     @Test
     fun listDark() {
-        rule.onNodeWithTag("row-${byText("Bucket list").id}").performClick()
+        rule.onNodeWithTag("open-${byText("Bucket list").id}").performClick()
         rule.waitForIdle()
-        rule.shot("16-list-dark")
+        rule.shot("19-list-dark")
     }
 }
 
@@ -522,8 +705,9 @@ class ShareUiTest {
         val bucket = byText("Bucket list")
         ActivityScenario.launch<ShareActivity>(share("https://youtu.be/dQw4w9WgXcQ?si=abc", "Never Gonna Give You Up")).use {
             rule.onNodeWithText("Save to Twig").assertExists()
-            rule.onNodeWithText("YouTube").assertExists()
-            rule.shot("17-share")
+            rule.onNodeWithText("YouTube video").assertExists()
+            rule.onNodeWithTag("dest-0").assertExists() // Home is a place too
+            rule.shot("20-share")
             rule.onNodeWithTag("dest-${bucket.id}").performClick()
             rule.waitForIdle()
             val n = bucket.children.first()
@@ -536,10 +720,9 @@ class ShareUiTest {
     fun chosenTargetSavesWithoutAsking() {
         Store.awaitLoaded()
         Store.ensureSeeded()
-        val bucket = byText("Bucket list")
-        Store.shareTarget = bucket
+        Store.shareTarget = Store.root
         ActivityScenario.launch<ShareActivity>(share("Some tab https://example.com/a?utm_source=x", null)).use {
-            val n = bucket.children.first()
+            val n = Store.root.children.first()
             assertEquals("Some tab", n.plain)
             assertEquals("https://example.com/a", n.url)
             rule.onNodeWithText("Save to Twig").assertDoesNotExist()

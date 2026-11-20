@@ -2,7 +2,12 @@ package app.twig
 
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.ui.text.TextRange
+import android.os.Looper
+import app.twig.data.Markup
 import app.twig.data.Node
+import org.robolectric.Shadows.shadowOf
 import app.twig.data.Store
 import app.twig.data.TextFormat
 import org.junit.Assert.assertEquals
@@ -157,12 +162,72 @@ class StoreTest {
     }
 
     @Test
-    fun enterAtStartOfTitleKeepsIt() {
-        val (list) = mk("Groceries")
-        Store.onHeaderEnter(list, "", listOf("", ""), "Groceries")
-        assertEquals("Groceries", list.plain)
-        assertEquals(1, list.children.size)
-        assertEquals(list.children[0].id, Store.focusReq!!.nodeId)
+    fun sortAndUndo() {
+        val (list) = mk("list")
+        mk("banana", "**Apple**", "cherry", "apricot", parent = list)
+        Store.sort(list, descending = false)
+        assertEquals("**Apple**,apricot,banana,cherry", names(list)) // bold markers don't count
+        assertEquals("Sorted A–Z", Store.notice!!.message)
+        Store.sort(list, descending = true)
+        assertEquals("cherry,banana,apricot,**Apple**", names(list))
+        Store.notice!!.undo()
+        assertEquals("**Apple**,apricot,banana,cherry", names(list))
+        Store.flushBlocking()
+        Store.init(ApplicationProvider.getApplicationContext())
+        Store.awaitLoaded()
+        assertEquals("**Apple**,apricot,banana,cherry", names(Store.root.children[0]))
+    }
+
+    @Test
+    fun moveUpAndDown() {
+        val (a, b, c) = mk("a", "b", "c")
+        assertTrue(Store.moveBy(c, -1))
+        assertEquals("a,c,b", names(root))
+        assertFalse(Store.moveBy(a, -1))
+        assertTrue(Store.moveBy(a, 1))
+        assertEquals("c,a,b", names(root))
+        assertFalse(Store.moveBy(b, 1))
+    }
+
+    @Test
+    fun useTitleReplacesTextWhenItArrives() {
+        val (a) = mk("my tab")
+        a.url = "example.com/aurora"
+        val seen = ArrayList<String>()
+        Store.fetchTitle = { seen.add(it); "Aurora guide" }
+        Store.useTitle(a)
+        assertTrue(a.id in Store.fetching)
+        // the fetch runs on the IO dispatcher, then comes back to the main thread
+        repeat(200) {
+            if (a.id in Store.fetching) {
+                Thread.sleep(10)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+        }
+        assertEquals("Aurora guide", a.plain)
+        assertEquals(listOf("https://example.com/aurora"), seen)
+        assertFalse(a.id in Store.fetching)
+    }
+
+    @Test
+    fun boldMarkup() {
+        assertEquals("Bold and more", Markup.plain("**Bold** and **more**"))
+        val shown = Markup.styled("a **b** c")
+        assertEquals("a b c", shown.text)
+        assertEquals(2 to 3, shown.spanStyles.single().let { it.start to it.end })
+        val t = TextFieldState("make this bold", TextRange(5, 10)) // "this "
+        Markup.toggleBold(t)
+        assertEquals("make **this** bold", t.text.toString())
+        Markup.toggleBold(t) // same selection, inside the markers: back off
+        assertEquals("make this bold", t.text.toString())
+        t.edit { selection = TextRange(5, 12) }
+        Markup.toggleBold(t)
+        assertEquals("make **this bo**ld", t.text.toString())
+        t.edit { selection = TextRange(5, 16) } // markers included in the selection
+        Markup.toggleBold(t)
+        assertEquals("make this bold", t.text.toString())
+        val (n) = mk("**Groceries** list")
+        assertEquals("Groceries list", Store.label(n))
     }
 
     @Test
@@ -171,7 +236,7 @@ class StoreTest {
         assertTrue(Store.backspaceEmpty(b))
         assertFalse(Store.isAlive(b))
         val (first) = mk("", parent = a)
-        assertTrue(Store.backspaceEmpty(first)) // lands in the list's title
+        assertFalse(Store.backspaceEmpty(first)) // first in its list: nothing above
         val (top) = mk("")
         Store.reorder(top, 0)
         assertFalse(Store.backspaceEmpty(top)) // nothing above it on Home
@@ -265,6 +330,8 @@ class StoreTest {
         val (b) = mk("b", parent = a)
         val (c) = mk("c", parent = b)
         assertSame(root, Store.addShared(c, "x", null).parent)
+        Store.shareTarget = root // Home counts too
+        assertSame(root, Store.shareTarget)
     }
 
     @Test
