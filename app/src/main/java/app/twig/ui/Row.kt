@@ -3,6 +3,7 @@
 package app.twig.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.tween
@@ -15,6 +16,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
 import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.OverscrollEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -46,6 +48,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +65,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.SolidColor
@@ -101,7 +107,11 @@ import app.twig.data.Node
 import app.twig.data.Store
 import app.twig.share.Glyph
 import app.twig.share.Sites
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.abs
 import kotlin.math.sign
 
 internal val BULLET_W = 30.dp
@@ -113,6 +123,38 @@ private enum class Swipe { Closed, Right, Left }
 
 /** Soft spring for a swipe settling or springing back. */
 private val Springy = spring<Float>(stiffness = Spring.StiffnessMediumLow)
+
+/** How much of the finger's travel a swipe keeps once it is past its stop. */
+private const val GIVE = 0.35f
+
+/**
+ * Resistance for [anchoredDraggable], which stops dead at its last anchor: past an action's stop
+ * the row keeps going at [GIVE] of the finger's speed, and springs back on release.
+ */
+private class Stretch(private val swipe: AnchoredDraggableState<Swipe>) : OverscrollEffect {
+    var x by mutableFloatStateOf(0f)
+    private var back: Job? = null
+    override val isInProgress get() = x != 0f
+
+    override fun applyToScroll(delta: Offset, source: NestedScrollSource, performScroll: (Offset) -> Offset): Offset {
+        back?.cancel()
+        var d = delta.x
+        if (x != 0f && sign(d) != sign(x)) { // pulling back undoes the stretch first
+            val to = if (abs(d * GIVE) < abs(x)) x + d * GIVE else 0f
+            d -= (to - x) / GIVE
+            x = to
+        }
+        val rest = d - performScroll(Offset(d, 0f)).x
+        if (swipe.offset != 0f) x += rest * GIVE // not where there is no action to swipe to
+        return delta
+    }
+
+    override suspend fun applyToFling(velocity: Velocity, performFling: suspend (Velocity) -> Velocity) = coroutineScope {
+        back = launch { animate(x, 0f, animationSpec = Springy) { v, _ -> x = v } }
+        performFling(velocity)
+        Unit
+    }
+}
 private const val LONG_PRESS_MS = 280L
 
 /** Height of a row's first line, so the dot sits on it at any text size. */
@@ -174,6 +216,7 @@ fun BulletRow(
     }
     val swipe = remember { AnchoredDraggableState(Swipe.Closed, anchors) }
     SideEffect { swipe.updateAnchors(anchors) }
+    val stretch = remember { Stretch(swipe) }
     fun action(v: Swipe) = if (v == Swipe.Right) right else left
     // Landed on an action: Delete stays open for a tap, the rest fire and spring back.
     LaunchedEffect(swipe.settledValue) {
@@ -223,6 +266,7 @@ fun BulletRow(
                             swipe,
                             reverseDirection = false,
                             orientation = Orientation.Horizontal,
+                            overscrollEffect = stretch,
                             flingBehavior = AnchoredDraggableDefaults.flingBehavior(swipe, animationSpec = Springy),
                         )
                         .semantics { customActions = a11y(node, canOpen, readOnly, actions) }
@@ -253,7 +297,7 @@ fun BulletRow(
         Row(
             Modifier
                 .fillMaxWidth()
-                .graphicsLayer { translationX = swipe.offset.takeUnless { it.isNaN() } ?: 0f }
+                .graphicsLayer { translationX = (swipe.offset.takeUnless { it.isNaN() } ?: 0f) + stretch.x }
                 .then(
                     if (dragged) {
                         Modifier

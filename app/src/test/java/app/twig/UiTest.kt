@@ -40,6 +40,8 @@ import app.twig.data.Node
 import app.twig.data.Store
 import app.twig.data.TextFormat
 import app.twig.share.ShareActivity
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -295,6 +297,21 @@ class UiTest {
         swipe("text-${n.id}", -32f)
         swipe("text-${pasta.id}", -32f)
         assertEquals(pasta.id, Store.revealedId)
+    }
+
+    @Test
+    fun swipePastTheStopGivesWay() {
+        openBucket()
+        val text = rule.onNodeWithTag("text-${lights.id}")
+        fun x() = text.fetchSemanticsNode().positionInRoot.x
+        val x0 = x()
+        val stop = with(rule.density) { 72.dp.toPx() }
+        swipe("text-${lights.id}", -60f, release = false) // 480px of finger
+        val pulled = x0 - x()
+        assertTrue("$pulled", pulled > stop + 40f && pulled < stop + (480f - stop) / 2) // past the stop, but resisting
+        text.performTouchInput { up() }
+        rule.waitForIdle()
+        assertEquals(stop, x0 - x(), 1f) // and back to the Delete button's width
     }
 
     @Test
