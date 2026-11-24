@@ -467,7 +467,7 @@ class UiTest {
 
     @Test
     fun readOnlyMode() {
-        menu("Read-only")
+        click("readOnly")
         assertTrue(Store.readOnly)
         rule.onNodeWithTag("addBullet").assertDoesNotExist()
         rule.onNodeWithTag("text-${bucket.id}").assertDoesNotExist() // nothing to type in
@@ -480,7 +480,7 @@ class UiTest {
         assertTrue(lights.done)
         click("bullet-${lights.id}") // an empty bullet doesn't open
         assertSame(bucket, Store.zoom)
-        menu("Read-only")
+        click("readOnly")
         assertFalse(Store.readOnly)
         rule.onNodeWithTag("addBullet").assertExists()
     }

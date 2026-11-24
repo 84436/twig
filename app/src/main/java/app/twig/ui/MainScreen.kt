@@ -5,7 +5,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -48,12 +47,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
@@ -81,6 +80,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
@@ -284,6 +284,10 @@ private fun TitleBar(zoom: Node, onSearch: () -> Unit, menu: @Composable () -> U
             }
         }
         IconButton(onClick = onSearch, modifier = Modifier.testTag("openSearch")) { Icon(Ic.Search, "Search") }
+        // the eye switches to reading only, the pencil back to editing
+        IconButton(onClick = { Store.readOnly = !Store.readOnly }, modifier = Modifier.testTag("readOnly")) {
+            if (Store.readOnly) Icon(Ic.Edit, "Edit") else Icon(Ic.Eye, "Read-only")
+        }
         menu()
     }
 }
@@ -326,13 +330,6 @@ private fun MoreMenu(
             MenuItem("Select", Ic.CheckCircle, item(onSelect))
             MenuItem("Sort A–Z", Ic.Sort, item { onSort(false) })
             MenuItem("Sort Z–A", Ic.Sort, item { onSort(true) })
-            DropdownMenuItem(
-                text = { Text("Read-only") },
-                leadingIcon = { Icon(Ic.Lock, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                trailingIcon = { if (Store.readOnly) Icon(Ic.Check, "On", Modifier.size(20.dp)) },
-                onClick = item { Store.readOnly = !Store.readOnly },
-                modifier = Modifier.testTag("readOnly"),
-            )
             HorizontalDivider()
             MenuItem("Copy all as text", Ic.Copy, item(onCopyAll))
             MenuItem("Replace all from clipboard", Ic.Paste, item(onPasteAll))
@@ -383,15 +380,12 @@ private fun EditToolbar(node: Node, onMove: (List<Node>) -> Unit, onStep: (Int) 
 
 @Composable
 private fun Tool(icon: ImageVector, desc: String, enabled: Boolean = true, on: Boolean = false, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
+    // the button's own container circle, so it fits its slot
     IconButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier
-            .size(44.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .background(if (on) cs.primaryContainer else cs.surfaceContainer)
-            .testTag("tool-$desc"),
+        colors = IconButtonDefaults.iconButtonColors(containerColor = if (on) MaterialTheme.colorScheme.primaryContainer else Color.Transparent),
+        modifier = Modifier.testTag("tool-$desc"),
     ) {
         Icon(icon, desc, Modifier.size(22.dp))
     }
