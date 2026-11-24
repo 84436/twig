@@ -1,9 +1,7 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
 
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    id("com.android.application") // compiles Kotlin itself since AGP 9
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
@@ -14,14 +12,16 @@ val keyProps = Properties().apply {
 
 android {
     namespace = "app.twig"
-    compileSdk = 36
+    compileSdk {
+        version = release(37) { minorApiLevel = 2 }
+    }
 
     defaultConfig {
         applicationId = "app.twig"
         minSdk = 26
-        targetSdk = 36
-        versionCode = 12
-        versionName = "twelve"
+        targetSdk = 37
+        versionCode = 13
+        versionName = "thirteen"
     }
 
     signingConfigs {
@@ -50,7 +50,6 @@ android {
     }
     buildFeatures {
         compose = true
-        buildConfig = false
     }
     testOptions {
         unitTests {
@@ -63,24 +62,19 @@ android {
     }
 }
 
-kotlin {
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
-    }
-}
 
 dependencies {
-    val bom = platform("androidx.compose:compose-bom:2025.12.01")
+    val bom = platform("androidx.compose:compose-bom:2026.11.01")
     implementation(bom)
-    implementation("androidx.activity:activity-compose:1.12.2")
+    implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     testImplementation(bom)
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation("org.robolectric:robolectric:4.18.1")
     testImplementation("androidx.test:core:1.7.0")
     testImplementation("androidx.test.ext:junit:1.3.0")
     testImplementation("androidx.compose.ui:ui-test-junit4")

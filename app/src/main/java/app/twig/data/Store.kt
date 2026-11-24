@@ -79,6 +79,8 @@ object Store {
     var selection by mutableStateOf<Set<Long>?>(null)
     /** The bullet whose Delete button is showing. */
     var revealedId by mutableStateOf<Long?>(null)
+    /** A bullet the page should scroll to once it has laid out its new order (keyboard-bar moves, sorting). */
+    var keepInView: Long? = null
     /** The bullet whose URL field is open. */
     var urlFor by mutableStateOf<Long?>(null)
     /** Bullets waiting for their page title. */
@@ -351,7 +353,9 @@ object Store {
     fun moveBy(n: Node, delta: Int): Boolean {
         val p = n.parent ?: return false
         val i = p.children.indexOf(n) + delta
-        return i in p.children.indices && reorder(n, i)
+        if (i !in p.children.indices || !reorder(n, i)) return false
+        keepInView = n.id
+        return true
     }
 
     /** Puts [page]'s bullets in A-Z (or Z-A) order of their text, for good. Undoable. */
@@ -361,6 +365,7 @@ object Store {
         val sorted = before.sortedWith { a, b -> collator.compare(label(a), label(b)) * if (descending) -1 else 1 }
         if (sorted == before) return
         setOrder(page, sorted)
+        keepInView = sorted.first().id // start at the top
         notice = Notice(if (descending) "Sorted Z–A" else "Sorted A–Z") {
             setOrder(page, before.filter { it.parent === page && isAlive(it) } + page.children.filter { it !in before })
         }

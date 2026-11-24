@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -113,6 +114,16 @@ fun Page(page: Node, listState: LazyListState, onMove: (List<Node>) -> Unit) {
         if (idx >= 0 && listState.layoutInfo.visibleItemsInfo.none { it.index == idx }) listState.scrollToItem(maxOf(0, idx - 2))
         delay(1200)
         if (Store.highlightId == id) Store.highlightId = null
+    }
+
+    // A list holds on to its first visible row when rows move, so a bullet moved past it would
+    // leave the screen. Ask for the scroll after recomposing with the new order and before laying it out.
+    SideEffect {
+        val id = Store.keepInView ?: return@SideEffect
+        Store.keepInView = null
+        val i = rows.indexOfFirst { it.id == id }
+        val vis = listState.layoutInfo.visibleItemsInfo
+        if (i >= 0 && vis.isNotEmpty() && (i <= vis.first().index || i >= vis.last().index)) listState.requestScrollToItem(maxOf(0, i - 1))
     }
 
     val shown = drag.preview ?: rows

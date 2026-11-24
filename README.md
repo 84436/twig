@@ -5,7 +5,7 @@ is a list, and lists hold plain bullets (two levels). Kotlin + Jetpack Compose, 
 
 - Versions: every change request is a new version. `versionCode` is the number, `versionName` the
   number spelled out (7 → "seven"), Hyperion Launcher style.
-- Build: `./gradlew assembleRelease` (needs Android SDK 36; set `sdk.dir` in `local.properties`)
+- Build: `./gradlew assembleRelease` (needs Android SDK 37.2; set `sdk.dir` in `local.properties`)
 - Tests: `./gradlew testDebugUnitTest` (Robolectric; screenshots land in `app/build/shots/`)
 - Signing: `keystore.properties` + `twig-release.jks` in the project root.
   Updates must be signed with the same key, or Android makes you uninstall (and lose notes).

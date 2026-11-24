@@ -21,7 +21,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35])
+@Config(sdk = [37])
 class StoreTest {
     private val root get() = Store.root
     private val main = android.os.Handler(Looper.getMainLooper())

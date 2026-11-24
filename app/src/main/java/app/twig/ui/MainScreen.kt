@@ -51,6 +51,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.SnackbarDuration
@@ -184,10 +189,7 @@ fun MainScreen() {
                             focusManager.clearFocus()
                             Store.selection = emptySet()
                         },
-                        onSort = {
-                            Store.sort(zoom, it)
-                            listState.requestScrollToItem(0) // the list would stay on the old top bullet
-                        },
+                        onSort = { Store.sort(zoom, it) },
                         onCopyAll = { Actions.copy(ctx, TextFormat.export(Store.root)) },
                         onPasteAll = { importing = TextFormat.parse(Actions.clipboardText(ctx)) },
                         onExport = { exportFile.launch("twig-${LocalDate.now()}.md") },
@@ -207,14 +209,7 @@ fun MainScreen() {
                 }
                 if (selection != null) BatchBar(zoom.children.filter { it.id in selection }, onMove = { moving = it })
                 else editingNode?.let { n ->
-                    EditToolbar(n, onMove = { moving = it }) { d ->
-                        // keep the bullet in view: the list holds on to its first visible row, not this one
-                        if (Store.moveBy(n, d)) {
-                            val i = zoom.children.indexOf(n)
-                            val vis = listState.layoutInfo.visibleItemsInfo
-                            if (vis.isNotEmpty() && (i <= vis.first().index || i >= vis.last().index)) listState.requestScrollToItem(maxOf(0, i - 1))
-                        }
-                    }
+                    EditToolbar(n, onMove = { moving = it }) { d -> Store.moveBy(n, d) }
                 }
             }
         }
@@ -257,7 +252,7 @@ private fun TitleBar(zoom: Node, onSearch: () -> Unit, menu: @Composable () -> U
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (zoom !== Store.root) {
-            IconButton(onClick = Store::zoomOut, modifier = Modifier.testTag("back")) { Icon(Ic.Back, "Back") }
+            Tip("Back", below = true) { IconButton(onClick = Store::zoomOut, modifier = Modifier.testTag("back")) { Icon(Ic.Back, "Back") } }
         } else {
             Spacer(Modifier.size(12.dp))
         }
@@ -281,10 +276,13 @@ private fun TitleBar(zoom: Node, onSearch: () -> Unit, menu: @Composable () -> U
                 )
             }
         }
-        IconButton(onClick = onSearch, modifier = Modifier.testTag("openSearch")) { Icon(Ic.Search, "Search") }
+        Tip("Search", below = true) { IconButton(onClick = onSearch, modifier = Modifier.testTag("openSearch")) { Icon(Ic.Search, "Search") } }
         // the eye switches to reading only, the pencil back to editing
-        IconButton(onClick = { Store.readOnly = !Store.readOnly }, modifier = Modifier.testTag("readOnly")) {
-            if (Store.readOnly) Icon(Ic.Edit, "Edit") else Icon(Ic.Eye, "Read-only")
+        val readOnly = if (Store.readOnly) "Edit" else "Read-only"
+        Tip(readOnly, below = true) {
+            IconButton(onClick = { Store.readOnly = !Store.readOnly }, modifier = Modifier.testTag("readOnly")) {
+                Icon(if (Store.readOnly) Ic.Edit else Ic.Eye, readOnly)
+            }
         }
         menu()
     }
@@ -300,7 +298,7 @@ private fun SearchView(onClose: () -> Unit, onOpen: (Node) -> Unit) {
     LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.statusBarsPadding().padding(start = 4.dp, end = 12.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose, modifier = Modifier.testTag("closeSearch")) { Icon(Ic.Back, "Close search") }
+            Tip("Close search", below = true) { IconButton(onClick = onClose, modifier = Modifier.testTag("closeSearch")) { Icon(Ic.Back, "Close search") } }
             SearchField(state, "Search", fr, Modifier.weight(1f).testTag("searchField")) { results.firstOrNull()?.let(onOpen) }
         }
         if (q.isNotBlank()) SearchResults(q, results, onOpen)
@@ -323,7 +321,7 @@ private fun MoreMenu(
         f()
     }
     Box {
-        IconButton(onClick = { open = true }, modifier = Modifier.testTag("more")) { Icon(Ic.More, "More") }
+        Tip("More", below = true) { IconButton(onClick = { open = true }, modifier = Modifier.testTag("more")) { Icon(Ic.More, "More") } }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             // read-only: nothing here that changes bullets
             val edit = !Store.readOnly
@@ -383,14 +381,28 @@ private fun EditToolbar(node: Node, onMove: (List<Node>) -> Unit, onStep: (Int) 
 @Composable
 private fun Tool(icon: ImageVector, desc: String, enabled: Boolean = true, on: Boolean = false, onClick: () -> Unit) {
     // the button's own container circle, so it fits its slot
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        colors = IconButtonDefaults.iconButtonColors(containerColor = if (on) MaterialTheme.colorScheme.primaryContainer else Color.Transparent),
-        modifier = Modifier.testTag("tool-$desc"),
-    ) {
-        Icon(icon, desc, Modifier.size(22.dp))
+    Tip(desc) {
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            colors = IconButtonDefaults.iconButtonColors(containerColor = if (on) MaterialTheme.colorScheme.primaryContainer else Color.Transparent),
+            modifier = Modifier.testTag("tool-$desc"),
+        ) {
+            Icon(icon, desc, Modifier.size(22.dp))
+        }
     }
+}
+
+/** An icon button's name in a small tooltip, on long-press or mouse hover. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun Tip(text: String, below: Boolean = false, content: @Composable () -> Unit) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(if (below) TooltipAnchorPosition.Below else TooltipAnchorPosition.Above),
+        tooltip = { PlainTooltip { Text(text) } },
+        state = rememberTooltipState(),
+        content = content,
+    )
 }
 
 /** Batch mode's top bar. */
@@ -405,7 +417,7 @@ private fun SelectionBar(count: Int, all: () -> Unit) {
             .testTag("selectionBar"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = { Store.selection = null }) { Icon(Ic.Close, "Stop selecting") }
+        Tip("Stop selecting", below = true) { IconButton(onClick = { Store.selection = null }) { Icon(Ic.Close, "Stop selecting") } }
         Text("$count selected", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).padding(start = 4.dp))
         TextButton(onClick = all) { Text("All") }
         TextButton(onClick = { Store.selection = emptySet() }) { Text("None") }

@@ -23,8 +23,8 @@ import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performTextReplacement
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -95,7 +95,7 @@ private fun SemanticsNodeInteractionsProvider.shot(name: String) {
 private fun byText(t: String): Node = Store.allNodes().first { it.plain == t }
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35], qualifiers = "w400dp-h860dp-xxhdpi")
+@Config(sdk = [37], qualifiers = "w400dp-h860dp-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class UiTest {
     @get:Rule
@@ -460,6 +460,20 @@ class UiTest {
     }
 
     @Test
+    fun longPressNamesTheButton() {
+        openBucket()
+        click("text-${lights.id}")
+        rule.onNodeWithTag("tool-Use page title").performTouchInput { longClick() }
+        rule.waitForIdle()
+        rule.onNodeWithText("Use page title").assertExists() // the tooltip, not the icon's description
+        rule.shot("21-tooltip")
+        assertTrue(Store.fetching.isEmpty()) // a long-press only names it
+        rule.onNodeWithTag("more").performTouchInput { longClick() }
+        rule.waitForIdle()
+        rule.onNodeWithText("More").assertExists()
+    }
+
+    @Test
     fun sortWithUndo() {
         openBucket()
         menu("Sort A–Z")
@@ -689,7 +703,7 @@ class UiTest {
 }
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35], qualifiers = "w400dp-h860dp-night-xxhdpi")
+@Config(sdk = [37], qualifiers = "w400dp-h860dp-night-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class DarkUiTest {
     @get:Rule
@@ -704,7 +718,7 @@ class DarkUiTest {
 }
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35], qualifiers = "w400dp-h860dp-xxhdpi")
+@Config(sdk = [37], qualifiers = "w400dp-h860dp-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ShareUiTest {
     @get:Rule
