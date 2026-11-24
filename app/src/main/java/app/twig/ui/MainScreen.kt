@@ -377,7 +377,7 @@ private fun EditToolbar(node: Node, onMove: (List<Node>) -> Unit, onStep: (Int) 
             Tool(Ic.Up, "Move up", enabled = index > 0) { onStep(-1) }
             Tool(Ic.Down, "Move down", enabled = index in 0 until siblings.lastIndex) { onStep(1) }
             Tool(Ic.Move, "Move to…") { onMove(listOf(node)) }
-            Tool(if (node.done) Ic.Undo else Ic.Check, if (node.done) "Mark not done" else "Mark done") { Store.toggleDone(node) }
+            Tool(if (node.done) Ic.CheckBoxBlank else Ic.CheckBox, if (node.done) "Mark not done" else "Mark done") { Store.toggleDone(node) }
         }
     }
 }
@@ -420,8 +420,8 @@ private fun BatchBar(nodes: List<Node>, onMove: (List<Node>) -> Unit) {
     val on = nodes.isNotEmpty()
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Row(Modifier.fillMaxWidth().height(64.dp).testTag("batchBar"), horizontalArrangement = Arrangement.SpaceEvenly) {
-            BatchAction(Ic.Check, "Done", on) { Store.setDone(nodes, true) }
-            BatchAction(Ic.Undo, "Undone", on) { Store.setDone(nodes, false) }
+            BatchAction(Ic.CheckBox, "Done", on) { Store.setDone(nodes, true) }
+            BatchAction(Ic.CheckBoxBlank, "Undone", on) { Store.setDone(nodes, false) }
             BatchAction(Ic.Move, "Move", on) { onMove(nodes) }
             BatchAction(Ic.Delete, "Delete", on) {
                 Store.selection = null

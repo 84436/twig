@@ -131,7 +131,7 @@ interface RowActions {
 }
 
 private fun swipeIcon(a: SwipeAction, done: Boolean) = when (a) {
-    SwipeAction.Done -> if (done) Ic.Undo else Ic.Check
+    SwipeAction.Done -> if (done) Ic.CheckBoxBlank else Ic.CheckBox
     SwipeAction.Select -> Ic.CheckCircle
     SwipeAction.Move -> Ic.Move
     else -> Ic.Delete
