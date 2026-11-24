@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -25,9 +24,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -38,7 +35,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -55,7 +51,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.SnackbarDuration
@@ -90,8 +85,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import app.twig.data.Markup
 import app.twig.data.Node
 import app.twig.data.Store
@@ -228,10 +221,15 @@ fun MainScreen() {
     }
 
     moving?.let { nodes ->
-        MoveDialog(nodes, onDismiss = { moving = null }) { dest ->
-            moving = null
-            if (Store.move(nodes, dest)) Store.selection = null
-        }
+        LocationSheet(
+            title = if (nodes.size == 1) "Move “${Store.label(nodes[0]).take(40)}” to…" else "Move ${nodes.size} bullets to…",
+            onDismiss = { moving = null },
+            moving = nodes,
+            onPick = { dest ->
+                moving = null
+                if (dest != null && Store.move(nodes, dest)) Store.selection = null
+            },
+        )
     }
     importing?.let { items ->
         ImportDialog(items.size, onDismiss = { importing = null }) {
@@ -479,28 +477,6 @@ private fun SwipeableSnackbar(data: SnackbarData) {
     )
 }
 
-@Composable
-private fun MoveDialog(nodes: List<Node>, onDismiss: () -> Unit, onPick: (Node) -> Unit) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.8f).imePadding(),
-        ) {
-            Column(Modifier.padding(top = 18.dp)) {
-                Text(
-                    if (nodes.size == 1) "Move “${Store.label(nodes[0]).take(40)}”" else "Move ${nodes.size} bullets",
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 10.dp),
-                )
-                DestinationPicker(nodes, onPick, Modifier.weight(1f), autoFocus = !Store.readOnly)
-            }
-        }
-    }
-}
-
 /** Everything that's a preference rather than an action. Changes apply as you tap. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -540,7 +516,12 @@ private fun SettingsSheet(onDismiss: () -> Unit) {
             }
         }
     }
-    if (askTarget) ShareTargetDialog { askTarget = false }
+    if (askTarget) {
+        LocationSheet("Save shared items to", onDismiss = { askTarget = false }, ask = true, marked = Store.shareTarget, onPick = {
+            askTarget = false
+            Store.shareTarget = it
+        })
+    }
 }
 
 @Composable
@@ -557,53 +538,6 @@ private fun Setting(title: String, content: @Composable () -> Unit) {
 @Composable
 private fun Chip(label: String, on: Boolean, tag: String, onClick: () -> Unit) {
     FilterChip(selected = on, onClick = onClick, label = { Text(label) }, modifier = Modifier.testTag(tag))
-}
-
-/** "Always ask" shows the share sheet; Home or a top-level bullet takes shares without asking. */
-@Composable
-private fun ShareTargetDialog(onDismiss: () -> Unit) {
-    val current = Store.shareTarget
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
-            Column(Modifier.padding(vertical = 18.dp)) {
-                Text(
-                    "Save shared items to",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
-                )
-                LazyColumn(Modifier.heightIn(max = 480.dp), contentPadding = PaddingValues(horizontal = 8.dp)) {
-                    item {
-                        Choice("Always ask", current == null, "target-ask") {
-                            Store.shareTarget = null
-                            onDismiss()
-                        }
-                    }
-                    items(listOf(Store.root) + Store.root.children, key = { it.id }) { n ->
-                        Choice(if (n === Store.root) "Home (top level)" else Store.label(n), current === n, "target-${n.id}") {
-                            Store.shareTarget = n
-                            onDismiss()
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun Choice(label: String, on: Boolean, tag: String, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(end = 16.dp)
-            .testTag(tag),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RadioButton(selected = on, onClick = null, modifier = Modifier.padding(12.dp))
-        Text(label, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
 }
 
 /** Import replaces everything, so it asks first. */

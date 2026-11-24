@@ -310,7 +310,7 @@ class UiTest {
         assertTrue(lights.done)
         rule.runOnIdle { Store.selection = null }
         swipe("text-${pasta.id}", -32f)
-        rule.onNodeWithText("Move “Learn to make fresh pasta”").assertExists()
+        rule.onNodeWithText("Move “Learn to make fresh pasta” to…").assertExists()
         click("dest-${welcome.id}")
         assertSame(welcome, pasta.parent)
         // Delete can sit on the right too, and Nothing means nothing (not even a tap into the text)
@@ -371,8 +371,14 @@ class UiTest {
         rule.shot("07-menu")
         rule.onNodeWithText("Move to…").performClick()
         rule.waitForIdle()
-        rule.onNodeWithTag("pickerField").assertIsFocused()
+        rule.onNodeWithText("Move “See the northern lights” to…").assertExists()
         rule.shot("08-move")
+        click("cancel") // X: nothing moves
+        rule.onNodeWithTag("locationSheet").assertDoesNotExist()
+        assertSame(bucket, n.parent)
+        longPressRelease("bullet-${n.id}")
+        rule.onNodeWithText("Move to…").performClick()
+        rule.waitForIdle()
         click("dest-0") // Home is a place too
         assertSame(Store.root, n.parent)
         rule.onNodeWithText("Moved to Home").assertExists()
@@ -507,9 +513,14 @@ class UiTest {
         click("left-Select")
         assertEquals(SwipeAction.Select, Store.swipeLeft)
         click("shareTarget")
-        click("target-0")
+        rule.onNodeWithTag("dest-ask").assertExists() // "Always ask" comes first
+        rule.shot("12-share-target")
+        click("dest-0")
         assertSame(Store.root, Store.shareTarget)
         rule.onNodeWithTag("shareTarget").assert(hasText("Home"))
+        click("shareTarget")
+        click("dest-ask")
+        assertNull(Store.shareTarget)
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.waitForIdle()
         rule.shot("12-big-mono")
@@ -721,6 +732,19 @@ class ShareUiTest {
             val n = bucket.children.first()
             assertEquals("Never Gonna Give You Up", n.plain)
             assertEquals("https://youtu.be/dQw4w9WgXcQ", n.url)
+        }
+    }
+
+    @Test
+    fun cancelSavesNothing() {
+        Store.awaitLoaded()
+        Store.ensureSeeded()
+        val before = Store.size
+        ActivityScenario.launch<ShareActivity>(share("https://example.com/a", "A page")).use { s ->
+            rule.onNodeWithTag("cancel").performClick()
+            rule.waitForIdle()
+            assertEquals(before, Store.size)
+            s.onActivity { assertTrue(it.isFinishing) }
         }
     }
 
