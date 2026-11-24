@@ -20,8 +20,8 @@ android {
         applicationId = "app.twig"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "eight"
+        versionCode = 9
+        versionName = "nine"
     }
 
     signingConfigs {

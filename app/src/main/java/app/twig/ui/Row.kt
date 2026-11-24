@@ -3,26 +3,28 @@
 package app.twig.ui
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.SideEffect
+import androidx.compose.foundation.gestures.anchoredDraggable
+import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
-import androidx.compose.foundation.gestures.horizontalDrag
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,13 +48,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
@@ -73,12 +73,8 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputScope
-import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -103,15 +99,15 @@ import app.twig.data.Node
 import app.twig.data.Store
 import app.twig.share.Glyph
 import app.twig.share.Sites
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.math.abs
 import kotlin.math.sign
 
 internal val BULLET_W = 30.dp
 internal val START_PAD = 6.dp
-private val SWIPE_GO = 76.dp
-private val REVEAL = 88.dp
+/** How far a swipe goes. A Delete swipe stays open this wide; any other action fires and springs back. */
+private val SWIPE = 72.dp
+
+private enum class Swipe { Closed, Right, Left }
 private const val LONG_PRESS_MS = 280L
 
 /** Height of a row's first line, so the dot sits on it at any text size. */
@@ -159,126 +155,101 @@ fun BulletRow(
     val isList = kids > 0
     val selecting = selected != null
     val density = LocalDensity.current
-    val go = with(density) { SWIPE_GO.toPx() }
-    val reveal = with(density) { REVEAL.toPx() }
-    val flingPx = with(density) { 900.dp.toPx() } // per second
-    val linePx = with(density) { lineBox().toPx() }
-    val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
-    val swipe = remember { Animatable(0f) }
-    val base = remember { FloatArray(1) } // where the row sat when the current swipe began
-    val armed = remember { BooleanArray(1) }
-    val revealed = Store.revealedId == node.id && !selecting
-    LaunchedEffect(revealed) {
-        if (!revealed && swipe.value != 0f) swipe.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
-    }
-    EditSession(node, editing)
     val right = Store.swipeRight
     val left = Store.swipeLeft
+    val distance = with(density) { SWIPE.toPx() }
+    val anchors = remember(right, left, distance) {
+        DraggableAnchors {
+            Swipe.Closed at 0f
+            if (right != SwipeAction.None) Swipe.Right at distance
+            if (left != SwipeAction.None) Swipe.Left at -distance
+        }
+    }
+    val swipe = remember { AnchoredDraggableState(Swipe.Closed, anchors) }
+    SideEffect { swipe.updateAnchors(anchors) }
+    fun action(v: Swipe) = if (v == Swipe.Right) right else left
+    // Landed on an action: Delete stays open for a tap, the rest fire and spring back.
+    LaunchedEffect(swipe.settledValue) {
+        val v = swipe.settledValue
+        if (v == Swipe.Closed) {
+            if (Store.revealedId == node.id) Store.revealedId = null
+            return@LaunchedEffect
+        }
+        when (action(v)) {
+            SwipeAction.Delete -> {
+                Store.revealedId = node.id
+                return@LaunchedEffect
+            }
+            SwipeAction.Done -> Store.toggleDone(node)
+            SwipeAction.Select -> Store.selection = setOf(node.id)
+            SwipeAction.Move -> actions.menu(node, MenuAction.MoveTo)
+            SwipeAction.None -> Unit
+        }
+        swipe.animateTo(Swipe.Closed)
+    }
+    // An open Delete goes away when another row opens, the list scrolls, or editing starts.
+    val revealed = Store.revealedId == node.id && !selecting
+    LaunchedEffect(revealed) { if (!revealed && swipe.settledValue != Swipe.Closed) swipe.animateTo(Swipe.Closed) }
+    val armed = swipe.targetValue != Swipe.Closed
+    LaunchedEffect(armed) { if (armed) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
+    val side by remember { derivedStateOf { swipe.offset.let { if (it.isNaN() || it == 0f) 0 else sign(it).toInt() } } }
+    EditSession(node, editing)
     val bg by animateColorAsState(
         if (highlighted || selected == true) cs.primary.copy(alpha = 0.16f) else cs.primary.copy(alpha = 0f),
         tween(if (highlighted || selected == true) 120 else 900),
         label = "hl",
     )
-    val rightIcon = rememberVectorPainter(swipeIcon(right, node.done))
-    val leftIcon = rememberVectorPainter(swipeIcon(left, node.done))
-    val idle = cs.surfaceContainerHighest
-    val goColor = cs.primary
-    val idleInk = cs.onSurfaceVariant
-    val goInk = cs.onPrimary
-
-    fun band(r: Float, limit: Float) = if (abs(r) <= limit) r else sign(r) * (limit + (abs(r) - limit) * 0.35f)
 
     Box(
         modifier
             .fillMaxWidth()
             .testTag("row-${node.id}")
-            .drawBehind {
-                // the strip a non-delete swipe uncovers, from the edge it started at
-                val x = swipe.value
-                val act = if (x > 0) right else left
-                if (x == 0f || act == SwipeAction.Delete || act == SwipeAction.None) return@drawBehind
-                val w = abs(x)
-                val on = w >= go
-                drawRect(if (on) goColor else idle, topLeft = Offset(if (x > 0) 0f else size.width - w, 0f), size = Size(w, size.height))
-                val icon = 22.dp.toPx()
-                val pad = 14.dp.toPx()
-                if (w > pad + icon) {
-                    translate(if (x > 0) pad else size.width - pad - icon, (linePx - icon) / 2) {
-                        with(if (x > 0) rightIcon else leftIcon) { draw(Size(icon, icon), colorFilter = ColorFilter.tint(if (on) goInk else idleInk)) }
-                    }
-                }
-            }
             .then(
                 if (selecting) {
                     Modifier
                         .clickable { Store.selection?.let { s -> Store.selection = if (node.id in s) s - node.id else s + node.id } }
                         .semantics { stateDescription = if (selected == true) "Selected" else "Not selected" }
                 } else {
-                    Modifier.pointerInput(node.id, actions, right, left) {
-                        swipeRow(
-                            onStart = {
-                                base[0] = if (Store.revealedId == node.id) sign(swipe.targetValue) * reveal else 0f
-                                if (base[0] == 0f) Store.revealedId = null
-                            },
-                            onMove = { dx ->
-                                val raw = base[0] + dx
-                                val act = if (raw > 0) right else left
-                                val v = when {
-                                    base[0] > 0f -> band(raw.coerceAtLeast(0f), reveal)
-                                    base[0] < 0f -> band(raw.coerceAtMost(0f), reveal)
-                                    act == SwipeAction.None -> 0f
-                                    else -> band(raw, if (act == SwipeAction.Delete) reveal else go)
-                                }
-                                val on = base[0] == 0f && act != SwipeAction.Delete && act != SwipeAction.None && abs(raw) >= go
-                                if (on != armed[0]) {
-                                    armed[0] = on
-                                    if (on) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                }
-                                scope.launch { swipe.snapTo(v) }
-                            },
-                            onEnd = { dx, vx ->
-                                armed[0] = false
-                                val raw = base[0] + dx
-                                val s = sign(if (base[0] != 0f) base[0] else raw)
-                                val act = if (s > 0) right else left
-                                val out = abs(if (s > 0) raw.coerceAtLeast(0f) else raw.coerceAtMost(0f)) // on its own side only
-                                val flungOut = vx * s > flingPx
-                                val flungBack = vx * s < -flingPx
-                                val target = when {
-                                    base[0] != 0f -> if (out > reveal / 2 && !flungBack) base[0] else 0f
-                                    act == SwipeAction.Delete -> if ((out > reveal / 2 && !flungBack) || (out > 0f && flungOut)) s * reveal else 0f
-                                    act != SwipeAction.None && (out >= go || (out >= go / 2 && flungOut)) -> {
-                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        when (act) {
-                                            SwipeAction.Done -> Store.toggleDone(node)
-                                            SwipeAction.Select -> Store.selection = setOf(node.id)
-                                            else -> actions.menu(node, MenuAction.MoveTo)
-                                        }
-                                        0f
-                                    }
-                                    else -> 0f
-                                }
-                                Store.revealedId = if (target != 0f) node.id else Store.revealedId.takeIf { it != node.id }
-                                scope.launch { swipe.animateTo(target, spring(stiffness = Spring.StiffnessMediumLow)) }
-                            },
-                        )
-                    }.semantics { customActions = a11y(node, canOpen, actions) }
+                    // physical left/right, also in right-to-left languages
+                    Modifier
+                        .anchoredDraggable(swipe, reverseDirection = false, orientation = Orientation.Horizontal)
+                        .semantics { customActions = a11y(node, canOpen, actions) }
                 }
             )
     ) {
-        if (!selecting) DeleteButton(node) { swipe.value }
+        // what the swipe uncovers: the action's icon, centred in a strip at the edge it came from
+        if (side != 0) {
+            val act = action(if (side > 0) Swipe.Right else Swipe.Left)
+            val delete = act == SwipeAction.Delete
+            val (fill, ink) = when {
+                !armed -> cs.surfaceContainerHighest to cs.onSurfaceVariant
+                delete -> cs.error to cs.onError
+                else -> cs.primary to cs.onPrimary
+            }
+            Box(Modifier.matchParentSize().background(fill), contentAlignment = if (side > 0) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight) {
+                Box(
+                    Modifier
+                        .width(SWIPE)
+                        .fillMaxHeight()
+                        .then(if (delete) Modifier.clickable(enabled = revealed) { Store.delete(listOf(node)) }.testTag("delete-${node.id}") else Modifier),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(swipeIcon(act, node.done), act.label, Modifier.size(22.dp), tint = ink)
+                }
+            }
+        }
         Row(
             Modifier
                 .fillMaxWidth()
-                .graphicsLayer { translationX = swipe.value }
+                .graphicsLayer { translationX = swipe.offset.takeUnless { it.isNaN() } ?: 0f }
                 .then(
                     if (dragged) {
                         Modifier
                             .shadow(10.dp, RoundedCornerShape(12.dp))
                             .background(cs.surfaceContainerHigh, RoundedCornerShape(12.dp))
                     } else {
-                        Modifier.background(bg)
+                        Modifier.background(cs.surface).background(bg) // opaque: hides what a swipe uncovers
                     }
                 )
                 .then(if (readOnly && isList && !selecting) Modifier.clickable { Store.zoom = node } else Modifier)
@@ -313,31 +284,6 @@ fun BulletRow(
             } else {
                 Spacer(Modifier.width(8.dp))
             }
-        }
-    }
-}
-
-/** Uncovered by a Delete swipe; grows with the swipe. Tapping it is the only way to delete a bullet. */
-@Composable
-private fun BoxScope.DeleteButton(node: Node, offset: () -> Float) {
-    val x = offset()
-    if (x == 0f || (if (x > 0) Store.swipeRight else Store.swipeLeft) != SwipeAction.Delete) return
-    val cs = MaterialTheme.colorScheme
-    // swipes are physical left/right, also in right-to-left languages
-    Box(Modifier.matchParentSize(), contentAlignment = if (x > 0) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight) {
-        Column(
-            Modifier
-                .fillMaxHeight()
-                .width(with(LocalDensity.current) { abs(x).toDp() })
-                .clipToBounds()
-                .background(cs.error)
-                .clickable { Store.delete(listOf(node)) }
-                .testTag("delete-${node.id}"),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Icon(Ic.Delete, null, Modifier.size(20.dp), tint = cs.onError)
-            Text("Delete", style = MaterialTheme.typography.labelMedium, color = cs.onError, maxLines = 1, softWrap = false)
         }
     }
 }
@@ -632,50 +578,6 @@ class SplitOnNewline(private val onSplit: (String, List<String>, String) -> Unit
         val after = new.subSequence(new.length - s, new.length).toString()
         revertAllChanges()
         Store.main.post { onSplit(before, inserted.split('\n'), after) }
-    }
-}
-
-/**
- * A horizontal swipe anywhere on a row: reports the distance while dragging and the final
- * distance + velocity on release. Vertical swipes are left alone so the list scrolls.
- */
-suspend fun PointerInputScope.swipeRow(
-    onStart: () -> Unit,
-    onMove: (dx: Float) -> Unit,
-    onEnd: (dx: Float, velocityX: Float) -> Unit,
-) = awaitEachGesture {
-    // Look at the down on the Initial pass: there, "consumed" can only mean the list used it to
-    // stop a fling. (On the Main pass the text field below would have consumed it already.)
-    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-    if (down.isConsumed) return@awaitEachGesture
-    val slop = viewConfiguration.touchSlop
-    var total = Offset.Zero
-    while (true) {
-        val ch = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
-        if (ch.changedToDownIgnoreConsumed()) continue // the same down, now on the Main pass
-        if (!ch.pressed || ch.isConsumed) return@awaitEachGesture
-        total += ch.positionChange()
-        if (total.getDistance() > slop) {
-            if (abs(total.x) <= abs(total.y) * 1.5f) return@awaitEachGesture
-            ch.consume()
-            break
-        }
-    }
-    val tracker = VelocityTracker()
-    tracker.addPosition(down.uptimeMillis, down.position)
-    var dx = total.x
-    onStart()
-    onMove(dx)
-    var ok = false
-    try {
-        ok = horizontalDrag(down.id) { ch ->
-            tracker.addPosition(ch.uptimeMillis, ch.position)
-            dx += ch.positionChange().x
-            onMove(dx)
-            ch.consume()
-        }
-    } finally {
-        if (ok) onEnd(dx, tracker.calculateVelocity().x) else onEnd(0f, 0f)
     }
 }
 

@@ -145,7 +145,7 @@ class UiTest {
                 advanceEventTime(16) // a move stamped with the down's time merges into it
                 moveBy(Offset(dx, 1f))
             }
-            advanceEventTime(16)
+            advanceEventTime(300) // stop before lifting: no fling, only the distance counts
             if (release) up()
         }
         rule.waitForIdle()
