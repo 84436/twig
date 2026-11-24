@@ -4,6 +4,7 @@ package app.twig.ui
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.runtime.derivedStateOf
@@ -12,6 +13,7 @@ import androidx.compose.foundation.gestures.anchoredDraggable
 import androidx.compose.foundation.gestures.animateTo
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
 import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -108,6 +110,9 @@ internal val START_PAD = 6.dp
 private val SWIPE = 72.dp
 
 private enum class Swipe { Closed, Right, Left }
+
+/** Soft spring for a swipe settling or springing back. */
+private val Springy = spring<Float>(stiffness = Spring.StiffnessMediumLow)
 private const val LONG_PRESS_MS = 280L
 
 /** Height of a row's first line, so the dot sits on it at any text size. */
@@ -156,8 +161,9 @@ fun BulletRow(
     val selecting = selected != null
     val density = LocalDensity.current
     val haptics = LocalHapticFeedback.current
-    val right = Store.swipeRight
-    val left = Store.swipeLeft
+    // read-only: completing is the one thing a swipe may still do
+    val right = Store.swipeRight.takeIf { !readOnly || it == SwipeAction.Done } ?: SwipeAction.None
+    val left = Store.swipeLeft.takeIf { !readOnly || it == SwipeAction.Done } ?: SwipeAction.None
     val distance = with(density) { SWIPE.toPx() }
     val anchors = remember(right, left, distance) {
         DraggableAnchors {
@@ -186,11 +192,11 @@ fun BulletRow(
             SwipeAction.Move -> actions.menu(node, MenuAction.MoveTo)
             SwipeAction.None -> Unit
         }
-        swipe.animateTo(Swipe.Closed)
+        swipe.animateTo(Swipe.Closed, Springy)
     }
     // An open Delete goes away when another row opens, the list scrolls, or editing starts.
     val revealed = Store.revealedId == node.id && !selecting
-    LaunchedEffect(revealed) { if (!revealed && swipe.settledValue != Swipe.Closed) swipe.animateTo(Swipe.Closed) }
+    LaunchedEffect(revealed) { if (!revealed && swipe.settledValue != Swipe.Closed) swipe.animateTo(Swipe.Closed, Springy) }
     val armed = swipe.targetValue != Swipe.Closed
     LaunchedEffect(armed) { if (armed) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
     val side by remember { derivedStateOf { swipe.offset.let { if (it.isNaN() || it == 0f) 0 else sign(it).toInt() } } }
@@ -213,8 +219,13 @@ fun BulletRow(
                 } else {
                     // physical left/right, also in right-to-left languages
                     Modifier
-                        .anchoredDraggable(swipe, reverseDirection = false, orientation = Orientation.Horizontal)
-                        .semantics { customActions = a11y(node, canOpen, actions) }
+                        .anchoredDraggable(
+                            swipe,
+                            reverseDirection = false,
+                            orientation = Orientation.Horizontal,
+                            flingBehavior = AnchoredDraggableDefaults.flingBehavior(swipe, animationSpec = Springy),
+                        )
+                        .semantics { customActions = a11y(node, canOpen, readOnly, actions) }
                 }
             )
     ) {
@@ -375,7 +386,7 @@ private fun NodeText(node: Node, editing: Boolean, canOpen: Boolean, actions: Ro
             .testTag("text-${node.id}")
             .semantics {
                 stateDescription = if (node.done) "Completed" else "Not completed"
-                customActions = a11y(node, canOpen, actions)
+                customActions = a11y(node, canOpen, false, actions)
             }
             .focusRequester(fr)
             .trackFocus(node)
@@ -392,9 +403,10 @@ private fun NodeText(node: Node, editing: Boolean, canOpen: Boolean, actions: Ro
 }
 
 /** TalkBack: everything the gestures do, as named actions. */
-private fun a11y(node: Node, canOpen: Boolean, actions: RowActions): List<CustomAccessibilityAction> = buildList {
+private fun a11y(node: Node, canOpen: Boolean, readOnly: Boolean, actions: RowActions): List<CustomAccessibilityAction> = buildList {
     add(CustomAccessibilityAction(if (node.done) "Mark not completed" else "Mark completed") { Store.toggleDone(node); true })
     if (canOpen) add(CustomAccessibilityAction("Open") { Store.zoom = node; true })
+    if (readOnly) return@buildList
     add(CustomAccessibilityAction("Move to…") { actions.menu(node, MenuAction.MoveTo); true })
     add(CustomAccessibilityAction("Delete") { Store.delete(listOf(node)); true })
 }
@@ -613,7 +625,8 @@ private fun Modifier.pressGestures(node: Node, onTap: (() -> Unit)?, actions: Ro
                 }
             }
             if (tapped) onTap?.invoke()
-            if (!held || !actions.dragStart(node)) return@awaitEachGesture
+            // read-only: no dragging, no menu
+            if (!held || Store.readOnly || !actions.dragStart(node)) return@awaitEachGesture
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
             var moved = false
             var afterPick = Offset.Zero

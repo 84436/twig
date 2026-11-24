@@ -476,8 +476,18 @@ class UiTest {
         assertSame(bucket, Store.zoom)
         click("label-${lights.id}")
         assertNull(Store.focusedId)
-        swipe("label-${lights.id}", 32f) // swipes still work
+        swipe("label-${lights.id}", 32f) // completing still works
         assertTrue(lights.done)
+        swipe("label-${lights.id}", -32f) // deleting doesn't
+        rule.onNodeWithTag("delete-${lights.id}").assertDoesNotExist()
+        assertTrue(Store.isAlive(lights))
+        longPressRelease("bullet-${lights.id}") // no menu, no drag
+        rule.onNodeWithText("Move to…").assertDoesNotExist()
+        click("more") // and the menu has nothing that changes bullets
+        rule.onNodeWithText("Select").assertDoesNotExist()
+        rule.onNodeWithText("Replace all from clipboard").assertDoesNotExist()
+        rule.onNodeWithText("Copy all as text").performClick()
+        rule.waitForIdle()
         click("bullet-${lights.id}") // an empty bullet doesn't open
         assertSame(bucket, Store.zoom)
         click("readOnly")

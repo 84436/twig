@@ -327,14 +327,18 @@ private fun MoreMenu(
     Box {
         IconButton(onClick = { open = true }, modifier = Modifier.testTag("more")) { Icon(Ic.More, "More") }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            MenuItem("Select", Ic.CheckCircle, item(onSelect))
-            MenuItem("Sort A–Z", Ic.Sort, item { onSort(false) })
-            MenuItem("Sort Z–A", Ic.Sort, item { onSort(true) })
-            HorizontalDivider()
+            // read-only: nothing here that changes bullets
+            val edit = !Store.readOnly
+            if (edit) {
+                MenuItem("Select", Ic.CheckCircle, item(onSelect))
+                MenuItem("Sort A–Z", Ic.Sort, item { onSort(false) })
+                MenuItem("Sort Z–A", Ic.Sort, item { onSort(true) })
+                HorizontalDivider()
+            }
             MenuItem("Copy all as text", Ic.Copy, item(onCopyAll))
-            MenuItem("Replace all from clipboard", Ic.Paste, item(onPasteAll))
+            if (edit) MenuItem("Replace all from clipboard", Ic.Paste, item(onPasteAll))
             MenuItem("Export to file", Ic.Down, item(onExport))
-            MenuItem("Replace all from file", Ic.Up, item(onImport))
+            if (edit) MenuItem("Replace all from file", Ic.Up, item(onImport))
             HorizontalDivider()
             MenuItem("Settings", Ic.Settings, item(onSettings))
         }
