@@ -197,17 +197,10 @@ class UiTest {
         assertSame(movies, Store.zoom)
         click("addBullet")
         rule.onNode(isFocused()).performTextInput("Dune")
+        click("bullet-${byText("Dune").id}") // two levels, and that's it
+        assertSame(movies, Store.zoom)
         click("back")
         rule.onNodeWithTag("open-${movies.id}").assertExists()
-        // one more level, and that's it
-        click("open-${movies.id}")
-        val dune = byText("Dune")
-        click("bullet-${dune.id}")
-        assertSame(dune, Store.zoom)
-        click("addBullet")
-        rule.onNode(isFocused()).performTextInput("Part One")
-        click("bullet-${byText("Part One").id}")
-        assertSame(dune, Store.zoom)
     }
 
     @Test
@@ -389,21 +382,13 @@ class UiTest {
     }
 
     @Test
-    fun movePickerKeepsThreeLevels() {
-        lateinit var deep: Node
-        rule.runOnIdle {
-            deep = Store.create(welcome, 0, "Sub-list")
-            Store.create(deep, 0, "item")
-        }
-        rule.waitForIdle()
+    fun movePickerKeepsTwoLevels() {
         longPressRelease("bullet-${bucket.id}")
         rule.onNodeWithText("Move to…").performClick()
         rule.waitForIdle()
-        rule.onNodeWithTag("dest-${welcome.id}").assertExists()
-        rule.onNodeWithTag("dest-${deep.id}").assertDoesNotExist() // Bucket list's items would be 4 deep
+        rule.onNodeWithTag("dest-0").assertExists()
+        rule.onNodeWithTag("dest-${welcome.id}").assertDoesNotExist() // Bucket list's items would be 3 deep
         rule.onNodeWithTag("dest-${bucket.id}").assertDoesNotExist() // not into itself
-        click("dest-${welcome.id}")
-        assertSame(welcome, bucket.parent)
     }
 
     @Test

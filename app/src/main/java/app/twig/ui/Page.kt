@@ -40,7 +40,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import app.twig.data.MAX_DEPTH
 import app.twig.data.Node
 import app.twig.data.Store
 import kotlinx.coroutines.delay
@@ -56,7 +55,7 @@ fun Page(page: Node, listState: LazyListState, onMove: (List<Node>) -> Unit) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val drag = remember(listState) { with(density) { DragState(listState, scope, 72.dp.toPx(), 20.dp.toPx()) } }
-    val canOpen = Store.depth(page) + 1 < MAX_DEPTH
+    val canOpen = page === Store.root
     var menuFor by remember { mutableStateOf<Long?>(null) }
     val highlight = Store.highlightId
     val focusedId = Store.focusedId

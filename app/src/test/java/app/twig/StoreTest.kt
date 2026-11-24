@@ -37,20 +37,17 @@ class StoreTest {
     private fun names(p: Node) = p.children.joinToString(",") { it.plain }
 
     @Test
-    fun threeLevelsDeep() {
-        val (a) = mk("a")
+    fun twoLevelsDeep() {
+        val (a, loose) = mk("a", "loose")
         val (b) = mk("b", parent = a)
-        val (c) = mk("c", parent = b)
-        val (loose) = mk("loose")
-        assertEquals(3, Store.depth(c))
-        assertTrue(Store.canHold(b, listOf(loose)))
-        assertFalse(Store.canHold(c, listOf(loose))) // a fourth level
-        assertFalse(Store.canHold(b, listOf(a))) // into itself
+        assertTrue(Store.canHold(a, listOf(loose)))
+        assertTrue(Store.canHold(root, listOf(a))) // Home takes lists too
+        assertFalse(Store.canHold(b, listOf(loose))) // a third level
+        assertFalse(Store.canHold(a, listOf(a))) // into itself
         val (list) = mk("list")
         mk("item", parent = list)
-        assertTrue(Store.canHold(a, listOf(list)))
-        assertFalse(Store.canHold(b, listOf(list))) // its item would be at level 4
-        assertFalse(Store.move(listOf(list), b))
+        assertFalse(Store.canHold(a, listOf(list))) // its item would be 3 deep
+        assertFalse(Store.move(listOf(list), a))
         assertSame(root, list.parent)
         assertNull(Store.notice)
     }
@@ -73,28 +70,26 @@ class StoreTest {
     }
 
     @Test
-    fun undoMoveRespectsThreeLevels() {
+    fun undoMoveRespectsTwoLevels() {
         val (a) = mk("a")
-        val (b) = mk("b", parent = a)
-        val (x) = mk("x", parent = b)
+        val (x) = mk("x", parent = a)
         assertTrue(Store.move(listOf(x), root))
         val undo = Store.notice!!.undo
-        mk("y", parent = x) // x is a list now; back under b, y would be 4 deep
+        mk("y", parent = x) // x is a list now; back under a, y would be 3 deep
         undo()
         assertSame(root, x.parent)
     }
 
     @Test
     fun batchDeleteUndoes() {
-        val (p) = mk("p")
-        val (x1, _, x3) = mk("x1", "x2", "x3", parent = p)
+        val (x1, _, x3) = mk("x1", "x2", "x3")
         mk("kid", parent = x3)
         Store.delete(listOf(x1, x3))
-        assertEquals("x2", names(p))
+        assertEquals("x2", names(root))
         assertFalse(Store.isAlive(x3.children[0]))
         assertEquals("Deleted 2 bullets", Store.notice!!.message)
         Store.notice!!.undo()
-        assertEquals("x1,x2,x3", names(p))
+        assertEquals("x1,x2,x3", names(root))
         assertTrue(Store.isAlive(x3.children[0]))
         Store.delete(listOf(x1))
         assertEquals("Deleted “x1”", Store.notice!!.message)
@@ -103,8 +98,8 @@ class StoreTest {
     @Test
     fun deletingTheOpenListGoesUp() {
         val (a) = mk("a")
-        val (b) = mk("b", parent = a)
-        Store.zoom = b
+        mk("b", parent = a)
+        Store.zoom = a
         Store.delete(listOf(a))
         assertSame(root, Store.zoom)
     }
@@ -271,12 +266,11 @@ class StoreTest {
         val (g, links) = mk("Groceries", "Links")
         val (eggs, _) = mk("Eggs", "Milk\nwhole", parent = g)
         Store.toggleDone(eggs)
-        mk("Cheese", parent = eggs)
         Store.create(links, 0, "Twig", "https://github.com/84436/twig")
         Store.create(links, 1, "", "https://example.com")
         val text = TextFormat.export(root)
         assertEquals(
-            "- Groceries\n\t- ~~Eggs~~\n\t\t- Cheese\n\t- Milk whole\n- Links\n\t- [Twig](https://github.com/84436/twig)\n\t- <https://example.com>\n",
+            "- Groceries\n\t- ~~Eggs~~\n\t- Milk whole\n- Links\n\t- [Twig](https://github.com/84436/twig)\n\t- <https://example.com>\n",
             text,
         )
         Store.replaceAll(TextFormat.parse(text))
@@ -309,7 +303,7 @@ class StoreTest {
         )
         assertEquals(
             listOf(
-                "1 a", "2 b", "3 c", "3 too deep", "3 task done ✓", "1 task open", "1 no marker", "2 tabbed",
+                "1 a", "2 b", "2 c", "2 too deep", "2 task done ✓", "1 task open", "1 no marker", "2 tabbed",
                 "1 Title https://x.com/a", "1  https://y.com ✓",
             ),
             items.map { listOfNotNull("${it.depth} ${it.text}", it.url).joinToString(" ") + if (it.done) " ✓" else "" },
@@ -349,11 +343,10 @@ class StoreTest {
         assertEquals("Inbox", Store.label(Store.shareTarget!!))
         Store.replaceAll(TextFormat.parse("- Other"))
         assertNull(Store.shareTarget)
-        // a bullet on the third level can't take more
+        // a bullet on the second level can't take more
         val (a) = mk("a")
         val (b) = mk("b", parent = a)
-        val (c) = mk("c", parent = b)
-        assertSame(root, Store.addShared(c, "x", null).parent)
+        assertSame(root, Store.addShared(b, "x", null).parent)
         Store.shareTarget = root // Home counts too
         assertSame(root, Store.shareTarget)
         Store.replaceAll(TextFormat.parse("- Home\n- Other")) // and survives a replace-all, even with a bullet called Home

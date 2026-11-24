@@ -83,10 +83,7 @@ fun SearchField(
     )
 }
 
-/**
- * Where should [moving] go? Home, every top-level bullet and the lists under them, or type to
- * search everything. Only places that keep the tree within three levels are offered.
- */
+/** Where should [moving] go? Home or a top-level bullet that may take them; type to narrow it down. */
 @Composable
 fun DestinationPicker(moving: List<Node>, onPick: (Node) -> Unit, modifier: Modifier = Modifier, autoFocus: Boolean = true) {
     val q = rememberTextFieldState()
@@ -95,38 +92,27 @@ fun DestinationPicker(moving: List<Node>, onPick: (Node) -> Unit, modifier: Modi
     val query = q.text.toString()
     val entries = remember(query) {
         val ok = { n: Node -> Store.canHold(n, moving) }
-        if (query.isNotBlank()) {
-            Store.search(query, 120).filter(ok)
-        } else {
-            buildList {
-                add(Store.root)
-                for (a in Store.root.children) {
-                    if (ok(a)) add(a)
-                    for (b in a.children) if (b.children.isNotEmpty() && ok(b)) add(b)
-                }
-            }
-        }
+        if (query.isNotBlank()) Store.search(query, 120).filter(ok) else listOf(Store.root) + Store.root.children.filter(ok)
     }
     Column(modifier) {
         SearchField(q, "Search lists…", fr, Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("pickerField")) {
             if (query.isNotBlank()) entries.firstOrNull()?.let(onPick)
         }
         LazyColumn(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-            items(entries, key = { it.id }) { n -> DestRow(n, searching = query.isNotBlank()) { onPick(n) } }
+            items(entries, key = { it.id }) { n -> DestRow(n) { onPick(n) } }
         }
     }
 }
 
 @Composable
-private fun DestRow(n: Node, searching: Boolean, onClick: () -> Unit) {
+private fun DestRow(n: Node, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val nested = !searching && Store.depth(n) == 2
     Row(
         Modifier
             .fillMaxWidth()
             .testTag("dest-${n.id}")
             .clickable(onClick = onClick)
-            .padding(start = if (nested) 44.dp else 20.dp, end = 16.dp, top = 6.dp, bottom = 6.dp)
+            .padding(start = 20.dp, end = 16.dp, top = 6.dp, bottom = 6.dp)
             .heightIn(min = 40.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -135,12 +121,7 @@ private fun DestRow(n: Node, searching: Boolean, onClick: () -> Unit) {
             else Box(Modifier.size(7.dp).clip(RoundedCornerShape(4.dp)).background(cs.onSurface.copy(alpha = 0.7f)))
         }
         Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(Store.label(n), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (searching && n.parent !== Store.root) {
-                Text(Store.pathLabel(n), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
+        Text(Store.label(n), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (n.children.isNotEmpty()) Text("${n.children.size}", style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
     }
 }

@@ -227,23 +227,9 @@ object Store {
     val size: Int get() = byId.size
     fun allNodes(): Collection<Node> = byId.values
 
-    /** Home is 0, its bullets 1, and so on down to [MAX_DEPTH]. */
-    fun depth(n: Node): Int {
-        var d = 0
-        var p = n.parent
-        while (p != null) {
-            d++
-            p = p.parent
-        }
-        return d
-    }
-
-    private fun height(n: Node): Int = if (n.children.isEmpty()) 0 else 1 + n.children.maxOf { height(it) }
-
-    /** Whether [nodes] can all go inside [dest]: not into themselves, and no deeper than [MAX_DEPTH]. */
+    /** Whether [nodes] can all go inside [dest]: Home takes anything, a top-level bullet only plain bullets. */
     fun canHold(dest: Node, nodes: Collection<Node>): Boolean =
-        isAlive(dest) && nodes.none { it === dest || it.isAncestorOf(dest) } &&
-            depth(dest) + 1 + (nodes.maxOfOrNull { height(it) } ?: 0) <= MAX_DEPTH
+        dest === root || (dest.parent === root && isAlive(dest) && nodes.none { it === dest || it.children.isNotEmpty() })
 
     fun label(n: Node): String =
         if (n === root) "Home" else Markup.plain(n.plain.lineSequence().first()).trim().take(60).ifEmpty { n.url ?: "Untitled" }
@@ -630,7 +616,7 @@ object Store {
     private val WELCOME = """
         - Welcome to Twig
             - Tap a list's dot or its › to open it. Back, or the path at the top, goes up.
-            - Tap the dot of any bullet to put bullets inside it. Lists go three levels deep.
+            - Tap the dot of a top-level bullet to put bullets inside it. Lists hold plain bullets, no deeper.
             - Tap a bullet's text to edit it. The bar above the keyboard adds a URL, makes words **bold**, moves and completes.
             - Swipe right to complete, swipe left to delete. ⋮ › Settings changes what swipes do.
             - Long-press a dot to drag the bullet, or let go for more.

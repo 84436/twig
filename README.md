@@ -1,8 +1,10 @@
 # Twig
 
-Snappy bullet lists for Android, organised like folders: a bullet with bullets in it is a list,
-three levels deep at most. Kotlin + Jetpack Compose, raw SQLite, whole tree in memory.
+Snappy bullet lists for Android, organised like folders: a top-level bullet with bullets in it
+is a list, and lists hold plain bullets (two levels). Kotlin + Jetpack Compose, raw SQLite, whole tree in memory.
 
+- Versions: every change request is a new version. `versionCode` is the number, `versionName` the
+  number spelled out (7 → "seven"), Hyperion Launcher style.
 - Build: `./gradlew assembleRelease` (needs Android SDK 36; set `sdk.dir` in `local.properties`)
 - Tests: `./gradlew testDebugUnitTest` (Robolectric; screenshots land in `app/build/shots/`)
 - Signing: `keystore.properties` + `twig-release.jks` in the project root.
