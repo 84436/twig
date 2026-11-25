@@ -11,8 +11,11 @@ is a list, and lists hold plain bullets (two levels). Kotlin + Jetpack Compose, 
   Updates must be signed with the same key, or Android makes you uninstall (and lose notes).
   Without them the release build falls back to the debug key.
 - Import/export: Markdown bullets, one tab per level (`data/TextFormat.kt`). Bold is `**…**` in the text itself.
+- Sync (`data/Gist.kt`): that same Markdown in a secret gist, `twig.md`, via a fine-grained token
+  with Gists read and write (Settings). Runs on open/close, after edits and every 15 minutes in the
+  background; when both sides changed, this phone wins and Undo takes the gist's copy.
 - Site-specific link looks (GitHub repos, YouTube videos/channels/playlists, osu! beatmaps): add a rule in `share/Sites.kt`.
-- Settings (swipes, text size, font, share target, read-only) live in the `meta` table.
+- Settings (swipes, text size, font, share target, read-only, sync token) live in the `meta` table.
 
-Layout: `data/` (Node, Store, Db, TextFormat, Markup), `share/` (share sheet, link parsing, site rules),
+Layout: `data/` (Node, Store, Db, TextFormat, Markup, Gist), `share/` (share sheet, link parsing, site rules),
 `ui/` (main screen + keyboard bar + settings, page, rows + gestures, drag to reorder, search, picker).

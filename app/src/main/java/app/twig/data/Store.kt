@@ -126,6 +126,7 @@ object Store {
         fetching = emptySet()
         fetchTitle = LinkInfo::fetchTitle
         flushScheduled = false
+        Gist.reset(ctx)
         thread(name = "twig-load", priority = Thread.MAX_PRIORITY) {
             try {
                 load()
@@ -171,6 +172,7 @@ object Store {
         pendingDeletes.remove(n.id)
         pendingUpserts[n.id] = n
         scheduleFlush()
+        Gist.changed()
     }
 
     private fun markDeleted(ids: Collection<Long>) {
@@ -179,7 +181,10 @@ object Store {
             pendingDeletes.add(id)
         }
         scheduleFlush()
+        Gist.changed()
     }
+
+    fun getMeta(k: String) = meta[k].orEmpty()
 
     fun setMeta(k: String, v: String) {
         if (meta[k] == v) return
@@ -592,16 +597,21 @@ object Store {
 
     private fun swipe(k: String, default: SwipeAction) = SwipeAction.entries.firstOrNull { it.name == meta[k] } ?: default
 
-    /** Clipboard or file import: everything goes, [items] come in. Shares keep going to a list of the same name. */
+    /**
+     * Import and sync: everything goes, [items] come in. The open list and shares stay with lists of
+     * the same name.
+     */
     fun replaceAll(items: List<TextFormat.Item>) {
         val target = shareTarget?.let(::label)
+        val open = zoom.takeIf { it !== root }?.let(::label)
         markDeleted(byId.keys.toList())
         byId.clear()
         root.children.clear()
         scrollMemory.clear()
         focusedId = null
         notice = null
-        zoom = root
+        selection = null
+        revealedId = null
         val last = arrayOfNulls<Node>(MAX_DEPTH + 1)
         last[0] = root
         for (it in items) {
@@ -609,6 +619,7 @@ object Store {
             last[it.depth] = create(p, p.children.size, it.text, it.url, it.done)
         }
         if (shareTarget !== root) shareTarget = root.children.firstOrNull { label(it) == target }
+        zoom = root.children.firstOrNull { label(it) == open } ?: root
         bump()
     }
 

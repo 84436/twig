@@ -42,6 +42,9 @@ import app.twig.data.TextFormat
 import app.twig.share.ShareActivity
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.dp
+import app.twig.data.Gist
+import kotlinx.coroutines.runBlocking
+import androidx.compose.ui.test.performScrollTo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -247,7 +250,12 @@ class UiTest {
         ime(true)
         rule.waitForIdle()
         assertEquals(lights.id, Store.focusedId)
+        ime(false) // only a blink, as when Enter moves the cursor to a new bullet
+        ime(true)
+        rule.mainClock.advanceTimeBy(1000)
+        assertEquals(lights.id, Store.focusedId)
         ime(false)
+        rule.mainClock.advanceTimeBy(1000)
         rule.waitForIdle()
         assertNull(Store.focusedId)
         rule.onNodeWithTag("toolbar").assertDoesNotExist()
@@ -552,6 +560,13 @@ class UiTest {
         click("shareTarget")
         click("dest-ask")
         assertNull(Store.shareTarget)
+        // sync: a token goes in, how it went comes out (GitHub faked, and it says no)
+        Gist.http = { _, _, _ -> Gist.Reply(401, """{"message":"Bad credentials"}""") }
+        rule.onNodeWithTag("gistToken").performScrollTo().performTextInput("ghp_x")
+        rule.runOnIdle { assertEquals("ghp_x", Gist.token) }
+        rule.runOnIdle { runBlocking { Gist.sync() } }
+        rule.onNodeWithTag("gistStatus").assert(hasText("GitHub says: Bad credentials"))
+        rule.shot("12-sync")
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.waitForIdle()
         rule.shot("12-big-mono")

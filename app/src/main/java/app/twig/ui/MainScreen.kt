@@ -41,6 +41,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.material3.OutlinedSecureTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -90,6 +91,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.twig.data.Gist
 import app.twig.data.Markup
 import app.twig.data.Node
 import app.twig.data.Store
@@ -126,9 +128,18 @@ fun MainScreen() {
         onDispose { Store.scrollMemory[zoom.id] = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
     }
 
-    // Keyboard put away: back to reading (no cursor, no keyboard bar).
+    // Keyboard put away: back to reading (no cursor, no keyboard bar). Not when it only blinks
+    // while the cursor moves to another bullet, as on Enter.
     val ime = WindowInsets.isImeVisible
-    LaunchedEffect(ime) { if (!ime) focusManager.clearFocus() }
+    var hadIme by remember { mutableStateOf(false) }
+    LaunchedEffect(ime) {
+        if (ime) {
+            hadIme = true
+        } else if (hadIme) {
+            delay(300)
+            focusManager.clearFocus()
+        }
+    }
 
     BackHandler(enabled = searching || selection != null || zoom !== Store.root) {
         when {
@@ -525,6 +536,26 @@ private fun SettingsSheet(onDismiss: () -> Unit) {
                     Chip("Sans-serif", !Store.monospace, "font-sans") { Store.monospace = false }
                     Chip("Monospace", Store.monospace, "font-mono") { Store.monospace = true }
                 }
+            }
+            Setting("Sync") {
+                val token = rememberTextFieldState(Gist.token)
+                LaunchedEffect(token) { snapshotFlow { token.text.toString() }.collect { Gist.token = it } }
+                OutlinedSecureTextField(
+                    state = token,
+                    placeholder = { Text("GitHub token") },
+                    modifier = Modifier.fillMaxWidth().testTag("gistToken"),
+                )
+                Text(
+                    if (Gist.token.isEmpty()) {
+                        "Paste a fine-grained GitHub token with Gists: read and write. Twig keeps everything in a " +
+                            "secret gist, twig.md. If there is one already, it replaces what's on this phone."
+                    } else {
+                        Gist.status ?: "Syncing soon"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp).testTag("gistStatus"),
+                )
             }
         }
     }

@@ -87,6 +87,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -489,6 +490,7 @@ private fun EditSession(node: Node, editing: Boolean) {
 /** Registers the focus requester, honours focus requests and persists text edits. */
 @Composable
 private fun TrackFocusAndEdits(node: Node, fr: FocusRequester) {
+    val keyboard = LocalSoftwareKeyboardController.current
     DisposableEffect(node.id) {
         Store.focusRequesters[node.id] = fr
         onDispose { if (Store.focusRequesters[node.id] === fr) Store.focusRequesters.remove(node.id) }
@@ -498,6 +500,7 @@ private fun TrackFocusAndEdits(node: Node, fr: FocusRequester) {
             if (req != null && req.nodeId == node.id) {
                 node.text.edit { selection = TextRange(req.cursor.coerceIn(0, length)) }
                 runCatching { fr.requestFocus() }
+                keyboard?.show() // a new bullet means more typing, even if the keyboard just went away
                 if (Store.focusReq === req) Store.focusReq = null
             }
         }

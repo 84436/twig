@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import app.twig.data.Gist
 import app.twig.data.Store
 import app.twig.ui.MainScreen
 import app.twig.ui.TwigTheme
@@ -24,8 +25,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
     }
 
+    override fun onStart() {
+        super.onStart()
+        Gist.start()
+    }
+
     override fun onStop() {
         super.onStop()
         Store.flush()
+        Gist.start() // what was typed goes up now
     }
 }
