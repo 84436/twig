@@ -58,9 +58,6 @@ import androidx.compose.ui.test.performTextInputSelection
 import androidx.compose.ui.text.TextRange
 import app.twig.data.SwipeAction
 import java.util.concurrent.CountDownLatch
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.graphics.Insets
 import androidx.compose.ui.test.assertIsNotFocused
 import org.junit.Rule
 import org.junit.Test
@@ -236,27 +233,11 @@ class UiTest {
     }
 
     @Test
-    fun hidingTheKeyboardEndsEditing() {
+    fun hideKeyboardButtonEndsEditing() {
         openBucket()
         click("text-${lights.id}")
-        val view = rule.activity.window.decorView
-        fun ime(visible: Boolean) = rule.runOnUiThread {
-            val insets = WindowInsetsCompat.Builder()
-                .setInsets(WindowInsetsCompat.Type.ime(), Insets.of(0, 0, 0, if (visible) 900 else 0))
-                .setVisible(WindowInsetsCompat.Type.ime(), visible)
-                .build()
-            ViewCompat.dispatchApplyWindowInsets(view, insets)
-        }
-        ime(true)
-        rule.waitForIdle()
         assertEquals(lights.id, Store.focusedId)
-        ime(false) // only a blink, as when Enter moves the cursor to a new bullet
-        ime(true)
-        rule.mainClock.advanceTimeBy(1000)
-        assertEquals(lights.id, Store.focusedId)
-        ime(false)
-        rule.mainClock.advanceTimeBy(1000)
-        rule.waitForIdle()
+        click("tool-Hide keyboard")
         assertNull(Store.focusedId)
         rule.onNodeWithTag("toolbar").assertDoesNotExist()
     }
@@ -305,6 +286,31 @@ class UiTest {
         swipe("text-${n.id}", -32f)
         swipe("text-${pasta.id}", -32f)
         assertEquals(pasta.id, Store.revealedId)
+    }
+
+    @Test
+    fun quickSwipesEachCountAndTheRowComesBack() {
+        openBucket()
+        val text = rule.onNodeWithTag("text-${lights.id}")
+        fun x() = text.fetchSemanticsNode().positionInRoot.x
+        val x0 = x()
+        rule.mainClock.autoAdvance = false
+        repeat(3) {
+            text.performTouchInput {
+                advanceEventTime(1000)
+                down(centerLeft + Offset(20f, 0f))
+                repeat(8) {
+                    advanceEventTime(16)
+                    moveBy(Offset(60f, 1f)) // past the stop
+                }
+                up() // a flick
+            }
+            rule.mainClock.advanceTimeBy(50) // still springing back when the next one comes
+        }
+        rule.mainClock.autoAdvance = true
+        rule.waitForIdle()
+        assertTrue(lights.done) // done, undone, done
+        assertEquals(x0, x(), 1f) // and back in its place
     }
 
     @Test

@@ -9,14 +9,9 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.SideEffect
-import androidx.compose.foundation.gestures.anchoredDraggable
-import androidx.compose.foundation.gestures.animateTo
 import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.DraggableAnchors
-import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
-import androidx.compose.foundation.gestures.AnchoredDraggableState
-import androidx.compose.foundation.OverscrollEffect
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -54,6 +49,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
@@ -65,8 +61,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.SolidColor
@@ -87,7 +81,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -109,7 +102,6 @@ import app.twig.data.Store
 import app.twig.share.Glyph
 import app.twig.share.Sites
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
@@ -117,45 +109,18 @@ import kotlin.math.sign
 
 internal val BULLET_W = 30.dp
 internal val START_PAD = 6.dp
-/** How far a swipe goes. A Delete swipe stays open this wide; any other action fires and springs back. */
+/** How far a swipe opens. Delete stays open this wide; other actions fire on release past half of it. */
 private val SWIPE = 72.dp
 
-private enum class Swipe { Closed, Right, Left }
+/** A flick this fast counts even when short (as with Compose's anchored drags). */
+private val FLICK = 125.dp
 
-/** Soft spring for a swipe settling or springing back. */
+/** Soft spring for a row opening or springing back. */
 private val Springy = spring<Float>(stiffness = Spring.StiffnessMediumLow)
 
-/** How much of the finger's travel a swipe keeps once it is past its stop. */
+/** How much of the finger's travel a swipe keeps once it is past [SWIPE]. */
 private const val GIVE = 0.35f
 
-/**
- * Resistance for [anchoredDraggable], which stops dead at its last anchor: past an action's stop
- * the row keeps going at [GIVE] of the finger's speed, and springs back on release.
- */
-private class Stretch(private val swipe: AnchoredDraggableState<Swipe>) : OverscrollEffect {
-    var x by mutableFloatStateOf(0f)
-    private var back: Job? = null
-    override val isInProgress get() = x != 0f
-
-    override fun applyToScroll(delta: Offset, source: NestedScrollSource, performScroll: (Offset) -> Offset): Offset {
-        back?.cancel()
-        var d = delta.x
-        if (x != 0f && sign(d) != sign(x)) { // pulling back undoes the stretch first
-            val to = if (abs(d * GIVE) < abs(x)) x + d * GIVE else 0f
-            d -= (to - x) / GIVE
-            x = to
-        }
-        val rest = d - performScroll(Offset(d, 0f)).x
-        if (swipe.offset != 0f) x += rest * GIVE // not where there is no action to swipe to
-        return delta
-    }
-
-    override suspend fun applyToFling(velocity: Velocity, performFling: suspend (Velocity) -> Velocity) = coroutineScope {
-        back = launch { animate(x, 0f, animationSpec = Springy) { v, _ -> x = v } }
-        performFling(velocity)
-        Unit
-    }
-}
 private const val LONG_PRESS_MS = 280L
 
 /** Height of a row's first line, so the dot sits on it at any text size. */
@@ -207,43 +172,57 @@ fun BulletRow(
     // read-only: completing is the one thing a swipe may still do
     val right = Store.swipeRight.takeIf { !readOnly || it == SwipeAction.Done } ?: SwipeAction.None
     val left = Store.swipeLeft.takeIf { !readOnly || it == SwipeAction.Done } ?: SwipeAction.None
-    val distance = with(density) { SWIPE.toPx() }
-    val anchors = remember(right, left, distance) {
-        DraggableAnchors {
-            Swipe.Closed at 0f
-            if (right != SwipeAction.None) Swipe.Right at distance
-            if (left != SwipeAction.None) Swipe.Left at -distance
+    val stop = with(density) { SWIPE.toPx() }
+    val flick = with(density) { FLICK.toPx() }
+    val scope = rememberCoroutineScope()
+    fun action(dx: Float) = if (dx > 0) right else if (dx < 0) left else SwipeAction.None
+    // Where the row sits. Past the stop it keeps a share of the finger's travel ([GIVE]).
+    var x by remember { mutableFloatStateOf(0f) }
+    val pull = remember { FloatArray(1) } // the finger's travel behind x
+    val settling = remember { arrayOfNulls<Job>(1) }
+    fun give(p: Float) = when {
+        action(p) == SwipeAction.None -> 0f
+        abs(p) <= stop -> p
+        else -> sign(p) * (stop + (abs(p) - stop) * GIVE)
+    }
+    fun springTo(target: Float, velocity: Float = 0f) {
+        settling[0]?.cancel()
+        settling[0] = scope.launch { animate(x, target, velocity, Springy) { v, _ -> x = v } }
+    }
+    // Each release decides on its own, so quick swipes in a row each count: Delete stays open for
+    // a tap, the rest fire and spring back.
+    fun release(v: Float) {
+        val act = action(x)
+        val go = act != SwipeAction.None && (if (abs(v) >= flick) v * x > 0 else abs(x) >= stop / 2)
+        when {
+            !go -> {
+                if (Store.revealedId == node.id) Store.revealedId = null
+                springTo(0f, v)
+            }
+            act == SwipeAction.Delete -> {
+                Store.revealedId = node.id
+                springTo(sign(x) * stop, v)
+            }
+            else -> {
+                when (act) {
+                    SwipeAction.Done -> Store.toggleDone(node)
+                    SwipeAction.Select -> Store.selection = setOf(node.id)
+                    else -> actions.menu(node, MenuAction.MoveTo)
+                }
+                springTo(0f, v)
+            }
         }
     }
-    val swipe = remember { AnchoredDraggableState(Swipe.Closed, anchors) }
-    SideEffect { swipe.updateAnchors(anchors) }
-    val stretch = remember { Stretch(swipe) }
-    fun action(v: Swipe) = if (v == Swipe.Right) right else left
-    // Landed on an action: Delete stays open for a tap, the rest fire and spring back.
-    LaunchedEffect(swipe.settledValue) {
-        val v = swipe.settledValue
-        if (v == Swipe.Closed) {
-            if (Store.revealedId == node.id) Store.revealedId = null
-            return@LaunchedEffect
-        }
-        when (action(v)) {
-            SwipeAction.Delete -> {
-                Store.revealedId = node.id
-                return@LaunchedEffect
-            }
-            SwipeAction.Done -> Store.toggleDone(node)
-            SwipeAction.Select -> Store.selection = setOf(node.id)
-            SwipeAction.Move -> actions.menu(node, MenuAction.MoveTo)
-            SwipeAction.None -> Unit
-        }
-        swipe.animateTo(Swipe.Closed, Springy)
+    val drag = rememberDraggableState { d ->
+        pull[0] += d
+        x = give(pull[0])
     }
     // An open Delete goes away when another row opens, the list scrolls, or editing starts.
     val revealed = Store.revealedId == node.id && !selecting
-    LaunchedEffect(revealed) { if (!revealed && swipe.settledValue != Swipe.Closed) swipe.animateTo(Swipe.Closed, Springy) }
-    val armed = swipe.targetValue != Swipe.Closed
+    LaunchedEffect(revealed) { if (!revealed && x != 0f) springTo(0f) }
+    val side by remember { derivedStateOf { sign(x).toInt() } }
+    val armed by remember(right, left, stop) { derivedStateOf { action(x) != SwipeAction.None && abs(x) >= stop / 2 } }
     LaunchedEffect(armed) { if (armed) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
-    val side by remember { derivedStateOf { swipe.offset.let { if (it.isNaN() || it == 0f) 0 else sign(it).toInt() } } }
     EditSession(node, editing)
     val bg by animateColorAsState(
         if (highlighted || selected == true) cs.primary.copy(alpha = 0.16f) else cs.primary.copy(alpha = 0f),
@@ -263,12 +242,15 @@ fun BulletRow(
                 } else {
                     // physical left/right, also in right-to-left languages
                     Modifier
-                        .anchoredDraggable(
-                            swipe,
-                            reverseDirection = false,
-                            orientation = Orientation.Horizontal,
-                            overscrollEffect = stretch,
-                            flingBehavior = AnchoredDraggableDefaults.flingBehavior(swipe, animationSpec = Springy),
+                        .draggable(
+                            drag,
+                            Orientation.Horizontal,
+                            enabled = right != SwipeAction.None || left != SwipeAction.None,
+                            onDragStarted = {
+                                settling[0]?.cancel() // catch a row that is still moving
+                                pull[0] = if (abs(x) <= stop) x else sign(x) * (stop + (abs(x) - stop) / GIVE)
+                            },
+                            onDragStopped = { v -> release(v) },
                         )
                         .semantics { customActions = a11y(node, canOpen, readOnly, actions) }
                 }
@@ -276,7 +258,7 @@ fun BulletRow(
     ) {
         // what the swipe uncovers: the action's icon, centred in a strip at the edge it came from
         if (side != 0) {
-            val act = action(if (side > 0) Swipe.Right else Swipe.Left)
+            val act = action(side.toFloat())
             val delete = act == SwipeAction.Delete
             val (fill, ink) = when {
                 !armed -> cs.surfaceContainerHighest to cs.onSurfaceVariant
@@ -298,7 +280,7 @@ fun BulletRow(
         Row(
             Modifier
                 .fillMaxWidth()
-                .graphicsLayer { translationX = (swipe.offset.takeUnless { it.isNaN() } ?: 0f) + stretch.x }
+                .graphicsLayer { translationX = x }
                 .then(
                     if (dragged) {
                         Modifier
@@ -490,7 +472,6 @@ private fun EditSession(node: Node, editing: Boolean) {
 /** Registers the focus requester, honours focus requests and persists text edits. */
 @Composable
 private fun TrackFocusAndEdits(node: Node, fr: FocusRequester) {
-    val keyboard = LocalSoftwareKeyboardController.current
     DisposableEffect(node.id) {
         Store.focusRequesters[node.id] = fr
         onDispose { if (Store.focusRequesters[node.id] === fr) Store.focusRequesters.remove(node.id) }
@@ -500,7 +481,6 @@ private fun TrackFocusAndEdits(node: Node, fr: FocusRequester) {
             if (req != null && req.nodeId == node.id) {
                 node.text.edit { selection = TextRange(req.cursor.coerceIn(0, length)) }
                 runCatching { fr.requestFocus() }
-                keyboard?.show() // a new bullet means more typing, even if the keyboard just went away
                 if (Store.focusReq === req) Store.focusReq = null
             }
         }
