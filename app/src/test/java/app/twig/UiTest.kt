@@ -216,20 +216,19 @@ class UiTest {
     }
 
     @Test
-    fun enterAddsBulletsAndEnterOnEmptyStops() {
+    fun enterKeepsTypingInTheSameField() {
         openBucket()
         click("addBullet")
+        val editing = Store.focusedId
         rule.onNode(isFocused()).performTextInput("A")
         rule.onNode(isFocused()).performTextInput("\n")
-        rule.waitForIdle()
         rule.onNode(isFocused()).performTextInput("B")
-        rule.shot("03-typing")
         rule.onNode(isFocused()).performTextInput("\n")
         rule.waitForIdle()
-        rule.onNode(isFocused()).performTextInput("\n") // on the new, empty bullet
-        rule.waitForIdle()
-        assertNull(Store.focusedId)
-        assertEquals(listOf("A", "B"), bucket.children.drop(3).map { it.plain })
+        assertEquals(editing, Store.focusedId) // the cursor never left: nothing for the keyboard to drop
+        rule.shot("03-typing")
+        click("tool-Hide keyboard")
+        assertEquals(listOf("A", "B"), bucket.children.drop(3).map { it.plain }) // and the trailing empty line went
     }
 
     @Test

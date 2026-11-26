@@ -10,8 +10,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.text.TextRange
 import app.twig.share.LinkInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -87,7 +85,6 @@ object Store {
     var fetching by mutableStateOf(emptySet<Long>())
     /** Network: a page's title. Swappable for tests. */
     var fetchTitle: (String) -> String? = LinkInfo::fetchTitle
-    val focusRequesters = HashMap<Long, FocusRequester>()
     /** Scroll position per list (index, offset), so going back lands where you were. */
     val scrollMemory = HashMap<Long, Pair<Int, Int>>()
 
@@ -114,7 +111,6 @@ object Store {
         pendingUpserts.clear()
         pendingDeletes.clear()
         pendingMeta.clear()
-        focusRequesters.clear()
         scrollMemory.clear()
         focusReq = null
         focusedId = null
@@ -454,45 +450,6 @@ object Store {
 
     fun toggleDone(n: Node) = setDone(listOf(n), !n.done)
 
-    /**
-     * The user typed or pasted line breaks into [n]. [parts] is the inserted text split on '\n'
-     * (so at least two parts); [before]/[after] are the untouched text around it.
-     * The new lines become bullets right after [n].
-     */
-    fun onEnter(n: Node, before: String, parts: List<String>, after: String) {
-        val p = n.parent
-        if (!isAlive(n) || p == null || parts.size < 2) return
-        if (parts.size == 2 && parts.all { it.isEmpty() } && before.isEmpty()) {
-            create(p, p.children.indexOf(n)) // Enter at the start: blank bullet above, cursor stays
-            return
-        }
-        n.text.setTextAndPlaceCursorAtEnd(before + parts.first())
-        dirty(n)
-        addLines(p, p.children.indexOf(n) + 1, parts, after)
-    }
-
-    private fun addLines(parent: Node, index: Int, parts: List<String>, after: String) {
-        val lines = parts.drop(1).toMutableList()
-        lines[lines.lastIndex] += after
-        var i = index
-        var last: Node? = null
-        for (line in lines) last = create(parent, i++, line)
-        last?.let { focusReq = FocusReq(it.id, parts.last().length) }
-    }
-
-    /** Backspace in an empty bullet: delete it and continue at the end of the one above. */
-    fun backspaceEmpty(n: Node): Boolean {
-        val p = n.parent ?: return false
-        val prev = p.children.getOrNull(p.children.indexOf(n) - 1)
-        if (n.text.text.isNotEmpty() || n.children.isNotEmpty() || !n.url.isNullOrBlank() || prev == null) return false
-        val end = prev.text.text.length
-        prev.text.edit { selection = TextRange(end) }
-        val fr = focusRequesters[prev.id]
-        if (fr == null || runCatching { fr.requestFocus() }.isFailure) focusReq = FocusReq(prev.id, end)
-        delete(listOf(n), undoable = false)
-        return true
-    }
-
     fun addAtEnd(parent: Node) {
         val last = parent.children.lastOrNull()
         val n = if (last != null && isBlank(last)) last else create(parent, parent.children.size)
@@ -501,10 +458,20 @@ object Store {
 
     private fun isBlank(n: Node) = n.plain.isBlank() && n.url.isNullOrBlank() && n.children.isEmpty()
 
-    /** The user left [n]: tidy its URL, and drop the bullet if nothing is left in it. */
+    /**
+     * The user left [n]: each line typed into it (Enter is a plain line break while editing) becomes
+     * a bullet, its URL gets tidied, and it goes if nothing is left in it.
+     */
     fun finishEditing(n: Node) {
         if (urlFor == n.id) urlFor = null
         if (!isAlive(n)) return
+        val p = n.parent
+        if ('\n' in n.plain && p != null) {
+            val lines = n.plain.lines().filter { it.isNotBlank() }
+            n.text.setTextAndPlaceCursorAtEnd(lines.firstOrNull().orEmpty())
+            dirty(n)
+            lines.drop(1).forEachIndexed { i, line -> create(p, p.children.indexOf(n) + 1 + i, line) }
+        }
         val u = n.url?.let { LinkInfo.normalize(it) }?.ifEmpty { null }
         if (u != n.url) {
             n.url = u

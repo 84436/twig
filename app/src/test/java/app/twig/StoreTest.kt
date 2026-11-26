@@ -125,17 +125,17 @@ class StoreTest {
     }
 
     @Test
-    fun enterSplitsIntoSiblings() {
-        val (a, z) = mk("hello world", "z")
-        Store.onEnter(a, "hello", listOf("", ""), " world")
-        assertEquals("hello, world,z", names(root))
-        assertEquals(root.children[1].id, Store.focusReq!!.nodeId)
-        // Enter at the very start leaves the text alone and adds a blank bullet above
-        Store.onEnter(z, "", listOf("", ""), "z")
-        assertEquals("hello, world,,z", names(root))
-        // a pasted list becomes several bullets
-        Store.onEnter(z, "z", listOf("", "one", "two"), "")
-        assertEquals("hello, world,,z,one,two", names(root))
+    fun linesBecomeBulletsWhenEditingEnds() {
+        val (a, z) = mk("hello\n world\n\nagain", "z")
+        a.url = "https://example.com"
+        Store.finishEditing(a)
+        assertEquals("hello, world,again,z", names(root)) // blank lines go
+        assertEquals("https://example.com", a.url) // and the first line keeps the bullet's URL
+        Store.finishEditing(z)
+        assertEquals("hello, world,again,z", names(root)) // one line: nothing to do
+        val (lead) = mk("\nlead")
+        Store.finishEditing(lead) // Enter at the very start: nothing above it after all
+        assertEquals("lead", lead.plain)
     }
 
     @Test
@@ -247,18 +247,6 @@ class StoreTest {
         assertEquals("See the lights", v.text.toString())
         assertEquals("one\ntwo", Markup.styled("**one\ntwo**").text) // bold may span a line break
         assertEquals(listOf(n), Store.search("groceries")) // markers don't get in the way of search
-    }
-
-    @Test
-    fun backspaceInEmptyBullet() {
-        val (a, b) = mk("a", "")
-        assertTrue(Store.backspaceEmpty(b))
-        assertFalse(Store.isAlive(b))
-        val (first) = mk("", parent = a)
-        assertFalse(Store.backspaceEmpty(first)) // first in its list: nothing above
-        val (top) = mk("")
-        Store.reorder(top, 0)
-        assertFalse(Store.backspaceEmpty(top)) // nothing above it on Home
     }
 
     @Test

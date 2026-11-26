@@ -70,22 +70,17 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -397,15 +392,9 @@ internal fun MenuItem(text: String, icon: ImageVector, onClick: () -> Unit) {
 private fun NodeText(node: Node, editing: Boolean, canOpen: Boolean, actions: RowActions) {
     val cs = MaterialTheme.colorScheme
     val fr = remember { FocusRequester() }
-    val focus = LocalFocusManager.current
     TrackFocusAndEdits(node, fr)
-    val transformation = remember(node.id) {
-        SplitOnNewline { before, parts, after ->
-            // Enter on an empty bullet: done typing (the empty bullet then goes away)
-            if (before.isEmpty() && after.isEmpty() && parts.size == 2 && parts.all { it.isEmpty() }) focus.clearFocus()
-            else Store.onEnter(node, before, parts, after)
-        }
-    }
+    val layout = remember { arrayOfNulls<() -> TextLayoutResult?>(1) }
+    val dot = cs.onSurface.copy(alpha = 0.72f)
     BasicTextField(
         state = node.text,
         modifier = Modifier
@@ -417,12 +406,22 @@ private fun NodeText(node: Node, editing: Boolean, canOpen: Boolean, actions: Ro
             }
             .focusRequester(fr)
             .trackFocus(node)
-            .onPreviewKeyEvent { e ->
-                e.type == KeyEventType.KeyDown && e.key == Key.Backspace && node.text.text.isEmpty() && Store.backspaceEmpty(node)
+            .drawBehind {
+                // Enter is a line break until editing ends ([Store.finishEditing]); each new line
+                // already gets the dot of the bullet it will become
+                val text = node.text.text
+                val r = layout[0]?.invoke() ?: return@drawBehind
+                var i = text.indexOf('\n')
+                while (i >= 0) {
+                    val line = r.getLineForOffset(i + 1)
+                    val y = (r.getLineTop(line) + r.getLineBottom(line)) / 2
+                    drawCircle(dot, radius = 3.5.dp.toPx(), center = Offset(-BULLET_W.toPx() / 2, y))
+                    i = text.indexOf('\n', i + 1)
+                }
             },
         textStyle = textStyle(node.done),
-        inputTransformation = transformation,
         outputTransformation = Markup.output(editing),
+        onTextLayout = { layout[0] = it },
         lineLimits = TextFieldLineLimits.MultiLine(),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         cursorBrush = SolidColor(cs.primary),
@@ -472,10 +471,6 @@ private fun EditSession(node: Node, editing: Boolean) {
 /** Registers the focus requester, honours focus requests and persists text edits. */
 @Composable
 private fun TrackFocusAndEdits(node: Node, fr: FocusRequester) {
-    DisposableEffect(node.id) {
-        Store.focusRequesters[node.id] = fr
-        onDispose { if (Store.focusRequesters[node.id] === fr) Store.focusRequesters.remove(node.id) }
-    }
     LaunchedEffect(node.id) {
         snapshotFlow { Store.focusReq }.collect { req ->
             if (req != null && req.nodeId == node.id) {
@@ -593,30 +588,6 @@ private object NoNewlines : InputTransformation {
     override fun TextFieldBuffer.transformInput() {
         val s = asCharSequence()
         if (s.indexOf('\n') >= 0) replace(0, length, s.toString().replace("\n", ""))
-    }
-}
-
-/**
- * Turns an inserted line break (Enter key, or a multi-line paste) into a split instead of a
- * newline. Text that already had line breaks (e.g. shared quotes) stays as it is.
- */
-class SplitOnNewline(private val onSplit: (String, List<String>, String) -> Unit) : InputTransformation {
-    override fun TextFieldBuffer.transformInput() {
-        val new = asCharSequence()
-        if (new.indexOf('\n') < 0) return
-        val old = originalText
-        if (new.count { it == '\n' } <= old.count { it == '\n' }) return
-        val max = minOf(old.length, new.length)
-        var p = 0
-        while (p < max && old[p] == new[p]) p++
-        var s = 0
-        while (s < max - p && old[old.length - 1 - s] == new[new.length - 1 - s]) s++
-        val inserted = new.subSequence(p, new.length - s).toString()
-        if ('\n' !in inserted) return
-        val before = new.subSequence(0, p).toString()
-        val after = new.subSequence(new.length - s, new.length).toString()
-        revertAllChanges()
-        Store.main.post { onSplit(before, inserted.split('\n'), after) }
     }
 }
 
