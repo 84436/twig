@@ -1,5 +1,10 @@
 package app.twig
 
+import android.Manifest
+import android.app.job.JobScheduler
+import android.content.Context
+import android.content.pm.PackageManager
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.twig.data.Gist
 import app.twig.data.Store
@@ -149,6 +154,20 @@ class GistTest {
         sync()
         assertEquals(listOf("g1"), github.gists.keys.toList()) // the same gist, not a fresh start
         assertEquals(here(), github.latest("g1"))
+    }
+
+    @Test
+    fun theBackgroundJobHasWhatAndroidAsksFor() {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val jobs = ctx.getSystemService(JobScheduler::class.java)
+        Gist.token = "token"
+        val job = jobs.allPendingJobs.single()
+        // Android refuses the job, and Twig crashed, without these; Robolectric doesn't check
+        val asked = ctx.packageManager.getPackageInfo(ctx.packageName, PackageManager.GET_PERMISSIONS).requestedPermissions!!.toSet()
+        if (job.requiredNetwork != null) assertTrue(Manifest.permission.ACCESS_NETWORK_STATE in asked)
+        if (job.isPersisted) assertTrue(Manifest.permission.RECEIVE_BOOT_COMPLETED in asked)
+        Gist.token = ""
+        assertTrue(jobs.allPendingJobs.isEmpty())
     }
 
     @Test
