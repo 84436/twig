@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.TextRange
 import app.twig.share.LinkInfo
 import kotlinx.coroutines.CoroutineScope
@@ -86,6 +87,7 @@ object Store {
     var fetching by mutableStateOf(emptySet<Long>())
     /** Network: a page's title. Swappable for tests. */
     var fetchTitle: (String) -> String? = LinkInfo::fetchTitle
+    val focusRequesters = HashMap<Long, FocusRequester>()
     /** Scroll position per list (index, offset), so going back lands where you were. */
     val scrollMemory = HashMap<Long, Pair<Int, Int>>()
 
@@ -112,6 +114,7 @@ object Store {
         pendingUpserts.clear()
         pendingDeletes.clear()
         pendingMeta.clear()
+        focusRequesters.clear()
         scrollMemory.clear()
         focusReq = null
         focusedId = null
@@ -454,52 +457,40 @@ object Store {
     /**
      * The user typed or pasted line breaks into [n]. [parts] is the inserted text split on '\n'
      * (so at least two parts); [before]/[after] are the untouched text around it.
-     *
-     * The cursor never leaves [n]'s field (moving it to another field makes the keyboard drop): the
-     * lines before it become bullets above, and [n] keeps the last line. The bullet that gets [n]'s
-     * own text also gets its URL, completion and bullets, so to the eye a new bullet came in below.
+     * The new lines become bullets right after [n].
      */
     fun onEnter(n: Node, before: String, parts: List<String>, after: String) {
         val p = n.parent
         if (!isAlive(n) || p == null || parts.size < 2) return
-        val i = p.children.indexOf(n)
-        parts.dropLast(1).forEachIndexed { k, line -> create(p, i + k, if (k == 0) before + line else line) }
-        if (before.isNotEmpty()) adopt(p.children[i], n) // Enter at the very start: the text stays put
-        val last = parts.last()
-        n.text.edit {
-            replace(0, length, last + after)
-            selection = TextRange(last.length)
+        if (parts.size == 2 && parts.all { it.isEmpty() } && before.isEmpty()) {
+            create(p, p.children.indexOf(n)) // Enter at the start: blank bullet above, cursor stays
+            return
         }
+        n.text.setTextAndPlaceCursorAtEnd(before + parts.first())
         dirty(n)
-        keepInView = n.id
-        bump()
+        addLines(p, p.children.indexOf(n) + 1, parts, after)
     }
 
-    /** Backspace in an empty bullet: the bullet above merges into it, cursor at its end, same field. */
+    private fun addLines(parent: Node, index: Int, parts: List<String>, after: String) {
+        val lines = parts.drop(1).toMutableList()
+        lines[lines.lastIndex] += after
+        var i = index
+        var last: Node? = null
+        for (line in lines) last = create(parent, i++, line)
+        last?.let { focusReq = FocusReq(it.id, parts.last().length) }
+    }
+
+    /** Backspace in an empty bullet: delete it and continue at the end of the one above. */
     fun backspaceEmpty(n: Node): Boolean {
         val p = n.parent ?: return false
         val prev = p.children.getOrNull(p.children.indexOf(n) - 1)
         if (n.text.text.isNotEmpty() || n.children.isNotEmpty() || !n.url.isNullOrBlank() || prev == null) return false
-        n.text.setTextAndPlaceCursorAtEnd(prev.plain)
-        adopt(n, prev)
-        delete(listOf(prev), undoable = false)
+        val end = prev.text.text.length
+        prev.text.edit { selection = TextRange(end) }
+        val fr = focusRequesters[prev.id]
+        if (fr == null || runCatching { fr.requestFocus() }.isFailure) focusReq = FocusReq(prev.id, end)
+        delete(listOf(n), undoable = false)
         return true
-    }
-
-    /** [to] takes over what belongs with [from]'s text: URL, completion, bullets, being the share target. */
-    private fun adopt(to: Node, from: Node) {
-        to.url = from.url.also { from.url = null }
-        to.done = from.done.also { from.done = false }
-        for (c in from.children) {
-            c.parent = to
-            to.children.add(c)
-            dirty(c)
-        }
-        from.children.clear()
-        if (meta["shareTarget"] == from.id.toString()) shareTarget = to
-        if (urlFor == from.id) urlFor = null
-        dirty(to)
-        dirty(from)
     }
 
     fun addAtEnd(parent: Node) {

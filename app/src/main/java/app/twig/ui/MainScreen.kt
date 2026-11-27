@@ -23,7 +23,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
@@ -103,6 +105,7 @@ import java.time.LocalDate
 import kotlin.math.abs
 import kotlin.math.sign
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MainScreen() {
     val ctx = LocalContext.current
@@ -124,6 +127,10 @@ fun MainScreen() {
     DisposableEffect(listState) {
         onDispose { Store.scrollMemory[zoom.id] = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
     }
+
+    // Keyboard put away (back, or the keyboard's own button): back to reading (no cursor, no keyboard bar).
+    val ime = WindowInsets.isImeVisible
+    LaunchedEffect(ime) { if (!ime) focusManager.clearFocus() }
 
     BackHandler(enabled = searching || selection != null || zoom !== Store.root) {
         when {
@@ -340,7 +347,6 @@ private fun MoreMenu(
 @Composable
 private fun EditToolbar(node: Node, onMove: (List<Node>) -> Unit, onStep: (Int) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val focusManager = LocalFocusManager.current
     val siblings = node.parent?.children.orEmpty()
     val index = remember(Store.version, node) { siblings.indexOf(node) }
     var armed by remember(node.id) { mutableStateOf(false) }
@@ -370,8 +376,6 @@ private fun EditToolbar(node: Node, onMove: (List<Node>) -> Unit, onStep: (Int) 
             Tool(Ic.Down, "Move down", enabled = index in 0 until siblings.lastIndex) { onStep(1) }
             Tool(Ic.Move, "Move to…") { onMove(listOf(node)) }
             Tool(if (node.done) Ic.CheckBoxBlank else Ic.CheckBox, if (node.done) "Mark not done" else "Mark done") { Store.toggleDone(node) }
-            // done typing: no cursor, no keyboard, no bar
-            Tool(Ic.KeyboardHide, "Hide keyboard") { focusManager.clearFocus() }
         }
     }
 }

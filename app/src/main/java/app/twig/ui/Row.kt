@@ -472,6 +472,10 @@ private fun EditSession(node: Node, editing: Boolean) {
 /** Registers the focus requester, honours focus requests and persists text edits. */
 @Composable
 private fun TrackFocusAndEdits(node: Node, fr: FocusRequester) {
+    DisposableEffect(node.id) {
+        Store.focusRequesters[node.id] = fr
+        onDispose { if (Store.focusRequesters[node.id] === fr) Store.focusRequesters.remove(node.id) }
+    }
     LaunchedEffect(node.id) {
         snapshotFlow { Store.focusReq }.collect { req ->
             if (req != null && req.nodeId == node.id) {

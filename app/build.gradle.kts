@@ -20,8 +20,8 @@ android {
         applicationId = "app.twig"
         minSdk = 26
         targetSdk = 37
-        versionCode = 19
-        versionName = "nineteen"
+        versionCode = 20
+        versionName = "twenty"
     }
 
     signingConfigs {
@@ -64,7 +64,8 @@ android {
 
 
 dependencies {
-    val bom = platform("androidx.compose:compose-bom:2026.11.01")
+    // Compose 1.12, not 1.13: 1.13 hides and re-shows the keyboard each time the cursor moves to another field
+    val bom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(bom)
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.foundation:foundation")
@@ -79,5 +80,6 @@ dependencies {
     testImplementation("androidx.test:core:1.7.0")
     testImplementation("androidx.test.ext:junit:1.3.0")
     testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test.espresso:espresso-core:3.7.0") // Compose 1.12's test rule brings 3.5, too old for SDK 37
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

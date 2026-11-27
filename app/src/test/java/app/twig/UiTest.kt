@@ -34,6 +34,9 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.core.app.ActivityScenario
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.graphics.Insets
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.twig.data.Node
@@ -219,12 +222,10 @@ class UiTest {
     fun enterAddsBulletsAndEnterOnEmptyStops() {
         openBucket()
         click("addBullet")
-        val field = Store.focusedId
         rule.onNode(isFocused()).performTextInput("A")
         rule.onNode(isFocused()).performTextInput("\n")
         rule.waitForIdle()
-        assertEquals(field, Store.focusedId) // still the same field: nothing for the keyboard to drop
-        rule.onNode(isFocused()).performTextInput("B")
+        rule.onNode(isFocused()).performTextInput("B") // the cursor went down to the new bullet
         rule.shot("03-typing")
         rule.onNode(isFocused()).performTextInput("\n")
         rule.waitForIdle()
@@ -235,11 +236,45 @@ class UiTest {
     }
 
     @Test
-    fun hideKeyboardButtonEndsEditing() {
+    fun backspaceOnAnEmptyBulletGoesUp() {
+        openBucket()
+        click("addBullet")
+        val empty = Store.focusedId!!
+        rule.onNode(isFocused()).performKeyInput { pressKey(Key.Backspace) }
+        rule.waitForIdle()
+        assertTrue(bucket.children.none { it.id == empty })
+        val above = bucket.children.last()
+        assertEquals(above.id, Store.focusedId)
+        assertEquals(above.plain.length, above.text.selection.start)
+    }
+
+    @Test
+    fun tappingAnotherBulletMovesTheCursorThere() {
         openBucket()
         click("text-${lights.id}")
         assertEquals(lights.id, Store.focusedId)
-        click("tool-Hide keyboard")
+        click("text-${pasta.id}")
+        assertEquals(pasta.id, Store.focusedId)
+        rule.onNodeWithTag("toolbar").assertExists()
+    }
+
+    @Test
+    fun hidingTheKeyboardEndsEditing() {
+        openBucket()
+        click("text-${lights.id}")
+        val view = rule.activity.window.decorView
+        fun ime(visible: Boolean) = rule.runOnUiThread {
+            val insets = WindowInsetsCompat.Builder()
+                .setInsets(WindowInsetsCompat.Type.ime(), Insets.of(0, 0, 0, if (visible) 900 else 0))
+                .setVisible(WindowInsetsCompat.Type.ime(), visible)
+                .build()
+            ViewCompat.dispatchApplyWindowInsets(view, insets)
+        }
+        ime(true)
+        rule.waitForIdle()
+        assertEquals(lights.id, Store.focusedId)
+        ime(false) // back, or the keyboard's own button
+        rule.waitForIdle()
         assertNull(Store.focusedId)
         rule.onNodeWithTag("toolbar").assertDoesNotExist()
     }
