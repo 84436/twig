@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.text.TextRange
 import app.twig.share.LinkInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -450,6 +451,57 @@ object Store {
 
     fun toggleDone(n: Node) = setDone(listOf(n), !n.done)
 
+    /**
+     * The user typed or pasted line breaks into [n]. [parts] is the inserted text split on '\n'
+     * (so at least two parts); [before]/[after] are the untouched text around it.
+     *
+     * The cursor never leaves [n]'s field (moving it to another field makes the keyboard drop): the
+     * lines before it become bullets above, and [n] keeps the last line. The bullet that gets [n]'s
+     * own text also gets its URL, completion and bullets, so to the eye a new bullet came in below.
+     */
+    fun onEnter(n: Node, before: String, parts: List<String>, after: String) {
+        val p = n.parent
+        if (!isAlive(n) || p == null || parts.size < 2) return
+        val i = p.children.indexOf(n)
+        parts.dropLast(1).forEachIndexed { k, line -> create(p, i + k, if (k == 0) before + line else line) }
+        if (before.isNotEmpty()) adopt(p.children[i], n) // Enter at the very start: the text stays put
+        val last = parts.last()
+        n.text.edit {
+            replace(0, length, last + after)
+            selection = TextRange(last.length)
+        }
+        dirty(n)
+        keepInView = n.id
+        bump()
+    }
+
+    /** Backspace in an empty bullet: the bullet above merges into it, cursor at its end, same field. */
+    fun backspaceEmpty(n: Node): Boolean {
+        val p = n.parent ?: return false
+        val prev = p.children.getOrNull(p.children.indexOf(n) - 1)
+        if (n.text.text.isNotEmpty() || n.children.isNotEmpty() || !n.url.isNullOrBlank() || prev == null) return false
+        n.text.setTextAndPlaceCursorAtEnd(prev.plain)
+        adopt(n, prev)
+        delete(listOf(prev), undoable = false)
+        return true
+    }
+
+    /** [to] takes over what belongs with [from]'s text: URL, completion, bullets, being the share target. */
+    private fun adopt(to: Node, from: Node) {
+        to.url = from.url.also { from.url = null }
+        to.done = from.done.also { from.done = false }
+        for (c in from.children) {
+            c.parent = to
+            to.children.add(c)
+            dirty(c)
+        }
+        from.children.clear()
+        if (meta["shareTarget"] == from.id.toString()) shareTarget = to
+        if (urlFor == from.id) urlFor = null
+        dirty(to)
+        dirty(from)
+    }
+
     fun addAtEnd(parent: Node) {
         val last = parent.children.lastOrNull()
         val n = if (last != null && isBlank(last)) last else create(parent, parent.children.size)
@@ -458,20 +510,10 @@ object Store {
 
     private fun isBlank(n: Node) = n.plain.isBlank() && n.url.isNullOrBlank() && n.children.isEmpty()
 
-    /**
-     * The user left [n]: each line typed into it (Enter is a plain line break while editing) becomes
-     * a bullet, its URL gets tidied, and it goes if nothing is left in it.
-     */
+    /** The user left [n]: tidy its URL, and drop the bullet if nothing is left in it. */
     fun finishEditing(n: Node) {
         if (urlFor == n.id) urlFor = null
         if (!isAlive(n)) return
-        val p = n.parent
-        if ('\n' in n.plain && p != null) {
-            val lines = n.plain.lines().filter { it.isNotBlank() }
-            n.text.setTextAndPlaceCursorAtEnd(lines.firstOrNull().orEmpty())
-            dirty(n)
-            lines.drop(1).forEachIndexed { i, line -> create(p, p.children.indexOf(n) + 1 + i, line) }
-        }
         val u = n.url?.let { LinkInfo.normalize(it) }?.ifEmpty { null }
         if (u != n.url) {
             n.url = u

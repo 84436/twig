@@ -125,17 +125,30 @@ class StoreTest {
     }
 
     @Test
-    fun linesBecomeBulletsWhenEditingEnds() {
-        val (a, z) = mk("hello\n world\n\nagain", "z")
+    fun enterSplitsAndTheCursorStaysInItsField() {
+        val (a, z) = mk("hello world", "z")
+        mk("kid", parent = a)
         a.url = "https://example.com"
-        Store.finishEditing(a)
-        assertEquals("hello, world,again,z", names(root)) // blank lines go
-        assertEquals("https://example.com", a.url) // and the first line keeps the bullet's URL
-        Store.finishEditing(z)
-        assertEquals("hello, world,again,z", names(root)) // one line: nothing to do
-        val (lead) = mk("\nlead")
-        Store.finishEditing(lead) // Enter at the very start: nothing above it after all
-        assertEquals("lead", lead.plain)
+        Store.shareTarget = a
+        Store.onEnter(a, "hello", listOf("", ""), " world")
+        assertEquals("hello, world,z", names(root))
+        assertSame(a, root.children[1]) // the field being typed in is the bullet below
+        assertEquals(0, a.text.selection.start) // cursor at the start of " world"
+        val hello = root.children[0] // and "hello" kept everything that came with it
+        assertEquals("https://example.com", hello.url)
+        assertEquals("kid", names(hello))
+        assertSame(hello, Store.shareTarget)
+        assertNull(a.url)
+        // Enter at the very start: a blank bullet above, the text and its URL stay
+        z.url = "https://z.example"
+        Store.onEnter(z, "", listOf("", ""), "z")
+        assertEquals("hello, world,,z", names(root))
+        assertEquals("https://z.example", z.url)
+        // a pasted list: all but its last line go above
+        Store.onEnter(z, "z", listOf("", "one", "two"), "")
+        assertEquals("hello, world,,z,one,two", names(root))
+        assertSame(z, root.children.last())
+        assertEquals("https://z.example", root.children[3].url)
     }
 
     @Test
@@ -247,6 +260,22 @@ class StoreTest {
         assertEquals("See the lights", v.text.toString())
         assertEquals("one\ntwo", Markup.styled("**one\ntwo**").text) // bold may span a line break
         assertEquals(listOf(n), Store.search("groceries")) // markers don't get in the way of search
+    }
+
+    @Test
+    fun backspaceInEmptyBullet() {
+        val (a, b) = mk("a", "")
+        a.done = true
+        assertTrue(Store.backspaceEmpty(b)) // "a" comes down into the field being typed in
+        assertFalse(Store.isAlive(a))
+        assertEquals("a", b.plain)
+        assertTrue(b.done)
+        assertEquals(1, b.text.selection.start)
+        val (first) = mk("", parent = a)
+        assertFalse(Store.backspaceEmpty(first)) // first in its list: nothing above
+        val (top) = mk("")
+        Store.reorder(top, 0)
+        assertFalse(Store.backspaceEmpty(top)) // nothing above it on Home
     }
 
     @Test
