@@ -18,11 +18,11 @@ android {
 
     defaultConfig {
         applicationId = "app.twig"
-        applicationIdSuffix = ".testc" // a separate app next to Twig, with its own notes
+        applicationIdSuffix = ".testd" // a separate app next to Twig, with its own notes
         minSdk = 26
         targetSdk = 37
         versionCode = 21
-        versionName = "twenty one, test C"
+        versionName = "twenty one, test D"
     }
 
     signingConfigs {
@@ -67,7 +67,7 @@ android {
 dependencies {
     // Newer Compose, activity and coroutines, or targeting Android 17, made the keyboard drop and come back
     // whenever the cursor moved to another bullet. Update only after typing on a phone: tap between bullets, Enter, Backspace.
-    val bom = platform("androidx.compose:compose-bom:2025.12.01")
+    val bom = platform("androidx.compose:compose-bom:2026.11.01")
     implementation(bom)
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.foundation:foundation")
