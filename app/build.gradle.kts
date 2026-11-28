@@ -18,10 +18,11 @@ android {
 
     defaultConfig {
         applicationId = "app.twig"
+        applicationIdSuffix = ".testa" // a separate app next to Twig, with its own notes
         minSdk = 26
-        targetSdk = 36 // with the libraries below: what Twig twelve ran on, the last with a steady keyboard
+        targetSdk = 37
         versionCode = 21
-        versionName = "twenty-one"
+        versionName = "twenty one, test A"
     }
 
     signingConfigs {
