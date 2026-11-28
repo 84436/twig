@@ -6,6 +6,5 @@ local.properties
 .kotlin/
 *.apk
 *.zip
-# release signing: keep these out of git, back them up yourself
+# release signing: the key is in git, its password stays out
 keystore.properties
-*.jks

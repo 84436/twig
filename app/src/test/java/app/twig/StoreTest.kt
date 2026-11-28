@@ -105,6 +105,32 @@ class StoreTest {
     }
 
     @Test
+    fun aFileFromAnotherVersionStartsOver() {
+        // Twig three's tables, under the same name
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        Store.flushBlocking()
+        ctx.deleteDatabase("twig.db")
+        android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(ctx.getDatabasePath("twig.db"), null).use { old ->
+            old.execSQL(
+                "CREATE TABLE nodes (id INTEGER PRIMARY KEY, parent INTEGER NOT NULL, rank REAL NOT NULL, text TEXT NOT NULL, " +
+                    "url TEXT, note TEXT, kind INTEGER NOT NULL, done INTEGER NOT NULL, collapsed INTEGER NOT NULL, " +
+                    "created INTEGER NOT NULL, modified INTEGER NOT NULL, attach TEXT)"
+            )
+            old.execSQL("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
+            old.execSQL("INSERT INTO nodes VALUES (5, 0, 1, 'from Twig three', NULL, NULL, 0, 0, 0, 0, 0, NULL)")
+            old.version = 1
+        }
+        Store.init(ctx)
+        Store.awaitLoaded()
+        assertTrue(Store.allNodes().none { it.plain == "from Twig three" })
+        mk("new") // and saving works with the fresh tables
+        Store.flushBlocking()
+        Store.init(ctx)
+        Store.awaitLoaded()
+        assertEquals("new", names(Store.root))
+    }
+
+    @Test
     fun reorderAndReload() {
         val (a, b, c) = mk("a", "b", "c")
         assertTrue(Store.reorder(a, 2))

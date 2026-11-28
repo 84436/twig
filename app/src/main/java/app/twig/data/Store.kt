@@ -105,7 +105,7 @@ object Store {
     // ---------------------------------------------------------------- lifecycle
 
     /** Starts loading on a background thread. Call [awaitLoaded] before touching the tree. */
-    fun init(ctx: Context, dbName: String? = "twig4.db") {
+    fun init(ctx: Context, dbName: String? = "twig.db") {
         main = Handler(Looper.getMainLooper())
         db = Db(ctx.applicationContext, dbName)
         val latch = CountDownLatch(1)

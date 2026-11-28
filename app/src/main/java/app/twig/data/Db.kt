@@ -6,8 +6,8 @@ import android.database.sqlite.SQLiteOpenHelper
 
 class NodeRow(val id: Long, val parent: Long, val rank: Double, val text: String, val url: String?, val done: Boolean)
 
-/** v4 starts a fresh file, so the v3 outline in twig.db stays untouched. */
-class Db(context: Context, name: String?) : SQLiteOpenHelper(context, name, null, 1) {
+/** No migrations: a file from another version of these tables starts over. */
+class Db(context: Context, name: String?) : SQLiteOpenHelper(context, name, null, 2) {
 
     init {
         setWriteAheadLoggingEnabled(true)
@@ -21,7 +21,11 @@ class Db(context: Context, name: String?) : SQLiteOpenHelper(context, name, null
         db.execSQL("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        db.execSQL("DROP TABLE IF EXISTS nodes")
+        db.execSQL("DROP TABLE IF EXISTS meta")
+        onCreate(db)
+    }
 
     fun loadAll(): List<NodeRow> = readableDatabase.rawQuery("SELECT id,parent,rank,text,url,done FROM nodes", null).use { c ->
         buildList {

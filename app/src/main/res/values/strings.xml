@@ -1,5 +1,4 @@
 <resources>
     <string name="app_name">Twig</string>
-    <string name="share_label">Save to Twig</string>
-    <string name="process_text_label">Save to Twig</string>
+    <string name="save_label">Save to Twig</string>
 </resources>

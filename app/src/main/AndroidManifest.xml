@@ -12,7 +12,6 @@
         android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.Twig">
 
@@ -32,7 +31,7 @@
             android:name=".share.ShareActivity"
             android:excludeFromRecents="true"
             android:exported="true"
-            android:label="@string/share_label"
+            android:label="@string/save_label"
             android:taskAffinity="app.twig.share"
             android:theme="@style/Theme.Twig.Share"
             android:windowSoftInputMode="adjustResize">
@@ -41,7 +40,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/*" />
             </intent-filter>
-            <intent-filter android:label="@string/process_text_label">
+            <intent-filter android:label="@string/save_label">
                 <action android:name="android.intent.action.PROCESS_TEXT" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
