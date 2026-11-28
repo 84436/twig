@@ -18,11 +18,11 @@ android {
 
     defaultConfig {
         applicationId = "app.twig"
-        applicationIdSuffix = ".testa" // a separate app next to Twig, with its own notes
+        applicationIdSuffix = ".testb" // a separate app next to Twig, with its own notes
         minSdk = 26
         targetSdk = 37
         versionCode = 21
-        versionName = "twenty one, test A"
+        versionName = "twenty one, test B"
     }
 
     signingConfigs {
@@ -73,7 +73,7 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("com.squareup.okhttp3:okhttp:5.5.1") // Android's own HTTP client can't PATCH
 
     testImplementation(bom)
