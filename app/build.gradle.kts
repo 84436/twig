@@ -18,11 +18,11 @@ android {
 
     defaultConfig {
         applicationId = "app.twig"
-        applicationIdSuffix = ".testb" // a separate app next to Twig, with its own notes
+        applicationIdSuffix = ".testc" // a separate app next to Twig, with its own notes
         minSdk = 26
         targetSdk = 37
         versionCode = 21
-        versionName = "twenty one, test B"
+        versionName = "twenty one, test C"
     }
 
     signingConfigs {
@@ -69,7 +69,7 @@ dependencies {
     // whenever the cursor moved to another bullet. Update only after typing on a phone: tap between bullets, Enter, Backspace.
     val bom = platform("androidx.compose:compose-bom:2025.12.01")
     implementation(bom)
-    implementation("androidx.activity:activity-compose:1.12.2")
+    implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")

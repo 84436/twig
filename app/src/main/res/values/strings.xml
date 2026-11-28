@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Twig B</string>
-    <string name="share_label">Save to Twig B</string>
-    <string name="process_text_label">Save to Twig B</string>
+    <string name="app_name">Twig C</string>
+    <string name="share_label">Save to Twig C</string>
+    <string name="process_text_label">Save to Twig C</string>
 </resources>
