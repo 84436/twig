@@ -19,12 +19,13 @@ import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsNodeInteractionsProvider
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performTextReplacement
-import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
-import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -679,8 +680,10 @@ class UiTest {
         rule.onNodeWithTag("text-${n.id}").performTextInputSelection(TextRange(0, 3))
         click("tool-Bold")
         assertEquals("**See** the northern lights", n.plain)
+        rule.onNodeWithTag("text-${n.id}").assertTextEquals("**See** the northern lights") // markers show while editing
         rule.shot("14-bold-editing")
         leave()
+        rule.onNodeWithTag("text-${n.id}").assertTextEquals("See the northern lights") // and hide after
         rule.shot("15-bold")
         click("text-${n.id}")
         click("tool-Move to…")
