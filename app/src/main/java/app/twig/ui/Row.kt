@@ -300,7 +300,7 @@ fun BulletRow(
                     val raw = node.plain
                     Text(remember(raw) { Markup.styled(raw) }, style = textStyle(node.done), modifier = Modifier.testTag("label-${node.id}"))
                 } else {
-                    NodeText(node, canOpen, actions)
+                    NodeText(node, editing, canOpen, actions)
                 }
                 val url = node.url
                 if (!selecting && !readOnly && Store.urlFor == node.id) UrlField(node)
@@ -394,7 +394,7 @@ internal fun MenuItem(text: String, icon: ImageVector, onClick: () -> Unit) {
 }
 
 @Composable
-private fun NodeText(node: Node, canOpen: Boolean, actions: RowActions) {
+private fun NodeText(node: Node, editing: Boolean, canOpen: Boolean, actions: RowActions) {
     val cs = MaterialTheme.colorScheme
     val fr = remember { FocusRequester() }
     val focus = LocalFocusManager.current
@@ -422,7 +422,7 @@ private fun NodeText(node: Node, canOpen: Boolean, actions: RowActions) {
             },
         textStyle = textStyle(node.done),
         inputTransformation = transformation,
-        outputTransformation = remember(node.id) { Markup.output { Store.focusedId == node.id } },
+        outputTransformation = Markup.output(editing),
         lineLimits = TextFieldLineLimits.MultiLine(),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         cursorBrush = SolidColor(cs.primary),

@@ -18,11 +18,11 @@ android {
 
     defaultConfig {
         applicationId = "app.twig"
-        applicationIdSuffix = ".testd" // a separate app next to Twig, with its own notes
+        applicationIdSuffix = ".teste" // a separate app next to Twig, with its own notes
         minSdk = 26
         targetSdk = 37
         versionCode = 21
-        versionName = "twenty one, test D"
+        versionName = "twenty one, test E"
     }
 
     signingConfigs {

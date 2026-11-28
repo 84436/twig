@@ -34,28 +34,27 @@ object Markup {
         append(s, at, s.length)
     }
 
-    /**
-     * For the bullet's text field. While [editing] says so, the markers show, dimmed. [editing] is
-     * read as state, so the field keeps one transformation: a new one would restart the keyboard.
-     */
-    fun output(editing: () -> Boolean) = OutputTransformation {
+    /** For the bullet's text field. [editing]: show the markers, dimmed. */
+    fun output(editing: Boolean) = if (editing) Editing else Reading
+
+    private val Reading = OutputTransformation {
         val ms = bold.findAll(asCharSequence()).toList()
-        if (editing()) {
-            val dim = SpanStyle(fontSize = 0.8.em, fontWeight = FontWeight.Normal)
-            for (m in ms) {
-                addStyle(boldStyle, m.range.first, m.range.last + 1)
-                addStyle(dim, m.range.first, m.range.first + 2)
-                addStyle(dim, m.range.last - 1, m.range.last + 1)
-            }
-        } else {
-            for (m in ms.asReversed()) {
-                replace(m.range.last - 1, m.range.last + 1, "")
-                replace(m.range.first, m.range.first + 2, "")
-            }
-            ms.forEachIndexed { i, m ->
-                val start = m.range.first - 4 * i
-                addStyle(boldStyle, start, start + m.groupValues[1].length)
-            }
+        for (m in ms.asReversed()) {
+            replace(m.range.last - 1, m.range.last + 1, "")
+            replace(m.range.first, m.range.first + 2, "")
+        }
+        ms.forEachIndexed { i, m ->
+            val start = m.range.first - 4 * i
+            addStyle(boldStyle, start, start + m.groupValues[1].length)
+        }
+    }
+
+    private val Editing = OutputTransformation {
+        val dim = SpanStyle(fontSize = 0.8.em, fontWeight = FontWeight.Normal)
+        for (m in bold.findAll(asCharSequence()).toList()) {
+            addStyle(boldStyle, m.range.first, m.range.last + 1)
+            addStyle(dim, m.range.first, m.range.first + 2)
+            addStyle(dim, m.range.last - 1, m.range.last + 1)
         }
     }
 
