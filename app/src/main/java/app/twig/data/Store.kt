@@ -354,6 +354,18 @@ object Store {
         return true
     }
 
+    /**
+     * Drag and drop: [group] (bullets of one page) goes together to [index] among the page's other
+     * bullets, in page order. Bullets that were apart end up next to each other.
+     */
+    fun placeTogether(group: List<Node>, index: Int) {
+        val page = group.firstOrNull()?.parent ?: return
+        val moving = page.children.filter { it in group }
+        val others = page.children.filter { it !in group }
+        val order = others.take(index) + moving + others.drop(index)
+        if (order != page.children) setOrder(page, order)
+    }
+
     /** One step up (-1) or down (+1) among its siblings. */
     fun moveBy(n: Node, delta: Int): Boolean {
         val p = n.parent ?: return false
@@ -480,13 +492,29 @@ object Store {
         last?.let { focusReq = FocusReq(it.id, parts.last().length) }
     }
 
-    /** Backspace in an empty bullet: delete it and continue at the end of the one above. */
-    fun backspaceEmpty(n: Node): Boolean {
+    /**
+     * Backspace at the very start of [n], the way deleting "- " in Markdown joins two lines: [n]'s text
+     * goes onto the end of the bullet above, the cursor where they meet, and its URL and bullets go along.
+     * An empty bullet just goes. Nothing happens on the first bullet, or when both have a URL.
+     */
+    fun backspaceAtStart(n: Node): Boolean {
         val p = n.parent ?: return false
-        val prev = p.children.getOrNull(p.children.indexOf(n) - 1)
-        if (n.text.text.isNotEmpty() || n.children.isNotEmpty() || !n.url.isNullOrBlank() || prev == null) return false
+        val prev = p.children.getOrNull(p.children.indexOf(n) - 1) ?: return false
+        if (!n.url.isNullOrBlank() && !prev.url.isNullOrBlank()) return false
         val end = prev.text.text.length
-        prev.text.edit { selection = TextRange(end) }
+        val rest = n.text.text.toString()
+        prev.text.edit {
+            append(rest)
+            selection = TextRange(end)
+        }
+        if (prev.url.isNullOrBlank()) prev.url = n.url
+        for (c in n.children.toList()) {
+            detach(c)
+            place(c, prev, prev.children.size)
+        }
+        if (shareTarget === n) shareTarget = prev
+        if (urlFor == n.id) urlFor = null
+        dirty(prev)
         val fr = focusRequesters[prev.id]
         if (fr == null || runCatching { fr.requestFocus() }.isFailure) focusReq = FocusReq(prev.id, end)
         delete(listOf(n), undoable = false)

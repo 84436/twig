@@ -158,6 +158,8 @@ fun BulletRow(
     editing: Boolean,
     highlighted: Boolean,
     dragged: Boolean,
+    /** How many other selected bullets ride along with this one while it's dragged. */
+    carrying: Int,
     menuOpen: Boolean,
     selected: Boolean?,
     readOnly: Boolean,
@@ -239,6 +241,8 @@ fun BulletRow(
                     Modifier
                         .clickable { Store.selection?.let { s -> Store.selection = if (node.id in s) s - node.id else s + node.id } }
                         .semantics { stateDescription = if (selected == true) "Selected" else "Not selected" }
+                        // hold a selected bullet to drag the whole selection
+                        .then(if (selected == true && !readOnly) Modifier.pressGestures(node, null, actions) else Modifier)
                 } else {
                     // physical left/right, also in right-to-left languages
                     Modifier
@@ -305,6 +309,11 @@ fun BulletRow(
                 val url = node.url
                 if (!selecting && !readOnly && Store.urlFor == node.id) UrlField(node)
                 else if (!url.isNullOrBlank()) LinkLine(url, enabled = !selecting)
+            }
+            if (carrying > 0) {
+                Box(Modifier.height(lineBox()).padding(horizontal = 8.dp).testTag("carrying"), contentAlignment = Alignment.Center) {
+                    Text("+$carrying", style = MaterialTheme.typography.labelLarge, color = cs.primary)
+                }
             }
             if (isList) {
                 Row(
@@ -418,7 +427,7 @@ private fun NodeText(node: Node, canOpen: Boolean, actions: RowActions) {
             .focusRequester(fr)
             .trackFocus(node)
             .onPreviewKeyEvent { e ->
-                e.type == KeyEventType.KeyDown && e.key == Key.Backspace && node.text.text.isEmpty() && Store.backspaceEmpty(node)
+                e.type == KeyEventType.KeyDown && e.key == Key.Backspace && node.text.selection == TextRange.Zero && Store.backspaceAtStart(node)
             },
         textStyle = textStyle(node.done),
         inputTransformation = transformation,
@@ -621,7 +630,7 @@ class SplitOnNewline(private val onSplit: (String, List<String>, String) -> Unit
 }
 
 /**
- * Tap: [onTap]. Long press: pick the row up; drag to reorder, or let go to open the menu.
+ * Tap: [onTap]. Long press: pick the row up; drag to reorder, or let go to open the menu (not while selecting).
  * Swipes are left to the row and the list.
  */
 @Composable
@@ -668,6 +677,7 @@ private fun Modifier.pressGestures(node: Node, onTap: (() -> Unit)?, actions: Ro
                     actions.drag(d.y)
                     ch.consume()
                 }
+                currentEvent.changes.forEach { it.consume() } // letting go after a hold is no tap
             } finally {
                 actions.dragEnd(node, moved, cancelled)
             }

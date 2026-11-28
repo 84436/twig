@@ -66,16 +66,18 @@ fun Page(page: Node, listState: LazyListState, onMove: (List<Node>) -> Unit) {
     val actions = remember(drag, page) {
         object : RowActions {
             override fun dragStart(node: Node): Boolean {
+                val selection = Store.selection
+                if (selection != null && node.id !in selection) return false
                 menuFor = null
                 Store.revealedId = null
-                return drag.start(node, rowsState.value)
+                return drag.start(node, rowsState.value, selection)
             }
 
             override fun drag(dy: Float) = drag.drag(dy)
 
             override fun dragEnd(node: Node, moved: Boolean, cancelled: Boolean) {
                 drag.end(commit = moved && !cancelled)
-                if (!moved) menuFor = node.id
+                if (!moved && Store.selection == null) menuFor = node.id
             }
 
             override fun menuDismiss() {
@@ -150,6 +152,7 @@ fun Page(page: Node, listState: LazyListState, onMove: (List<Node>) -> Unit) {
                 editing = focusedId == n.id,
                 highlighted = highlight == n.id,
                 dragged = isDragged,
+                carrying = if (isDragged) drag.group.size - 1 else 0,
                 menuOpen = menuFor == n.id,
                 selected = selection?.let { n.id in it },
                 readOnly = readOnly,

@@ -24,8 +24,8 @@ import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performTextReplacement
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -512,6 +512,40 @@ class UiTest {
         click("batch-Delete")
         assertTrue(bucket.children.isEmpty())
         assertNull(Store.selection)
+    }
+
+    @Test
+    fun draggingASelectionTakesItAlong() {
+        rule.runOnIdle {
+            Store.delete(bucket.children.toList(), undoable = false)
+            for (t in listOf("1", "2", "3", "4", "5")) Store.create(bucket, bucket.children.size, t)
+        }
+        openBucket()
+        menu("Select")
+        val two = byText("2")
+        click("row-${two.id}")
+        click("row-${byText("5").id}")
+        // holding without moving changes nothing, not even the selection
+        rule.onNodeWithTag("row-${two.id}").performTouchInput { longClick(center) }
+        rule.waitForIdle()
+        assertEquals(setOf(two.id, byText("5").id), Store.selection)
+        rule.mainClock.autoAdvance = false
+        rule.onNodeWithTag("row-${two.id}").performTouchInput {
+            down(center)
+            advanceEventTime(450)
+            repeat(10) {
+                moveBy(Offset(0f, -40f))
+                advanceEventTime(16)
+            }
+        }
+        rule.mainClock.advanceTimeBy(400)
+        rule.onNodeWithText("+1").assertExists() // 5 rides along
+        drawWindows("16-dragging-a-selection")
+        rule.onNodeWithTag("row-${two.id}").performTouchInput { up() }
+        rule.mainClock.autoAdvance = true
+        rule.waitForIdle()
+        assertEquals(listOf("2", "5", "1", "3", "4"), bucket.children.map { it.plain })
+        assertEquals(2, Store.selection?.size)
     }
 
     @Test

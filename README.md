@@ -4,11 +4,11 @@ Snappy bullet lists for Android, organised like folders: a top-level bullet with
 is a list, and lists hold plain bullets (two levels). Kotlin + Jetpack Compose, raw SQLite, whole tree in memory.
 
 - Versions: every change request is a new version. `versionCode` is the number, `versionName` the
-  number spelled out (7 → "seven"), Hyperion Launcher style.
+  number spelled out with spaces (7 → "seven", 22 → "twenty two"), Hyperion Launcher style.
 - Build: `./gradlew assembleRelease` (needs Android SDK 37.2; set `sdk.dir` in `local.properties`)
-- Compose 1.10, activity 1.12, coroutines 1.10 and targetSdk 36 stay as they were in Twig twelve: with
-  newer ones the keyboard dropped every time the cursor moved to another bullet. Update them only after
-  typing on a phone (tap between bullets, Enter, Backspace). `KeyboardTest` counts Compose's keyboard calls.
+- Keyboard: each move of the cursor to another bullet must reconnect the keyboard once. A second reconnect
+  (e.g. handing a field a new transformation when it gains focus) drops the keyboard on newer Compose.
+  `KeyboardTest` counts Compose's keyboard calls for taps, Enter and Backspace.
 - Tests: `./gradlew testDebugUnitTest` (Robolectric; screenshots land in `app/build/shots/`)
 - Signing: `keystore.properties` + `twig-release.jks` in the project root.
   Updates must be signed with the same key, or Android makes you uninstall (and lose notes).

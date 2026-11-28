@@ -259,16 +259,44 @@ class StoreTest {
     }
 
     @Test
-    fun backspaceInEmptyBullet() {
-        val (a, b) = mk("a", "")
-        assertTrue(Store.backspaceEmpty(b))
+    fun backspaceAtTheStartJoinsTheBulletAbove() {
+        val (a, b) = mk("hello ", "world")
+        b.url = "https://w.example"
+        mk("kid", parent = b)
+        Store.shareTarget = b
+        assertTrue(Store.backspaceAtStart(b))
         assertFalse(Store.isAlive(b))
-        assertEquals(a.id to 1, cursor()) // on at the end of the one above
-        val (first) = mk("", parent = a)
-        assertFalse(Store.backspaceEmpty(first)) // first in its list: nothing above
-        val (top) = mk("")
-        Store.reorder(top, 0)
-        assertFalse(Store.backspaceEmpty(top)) // nothing above it on Home
+        assertEquals("hello world", a.plain)
+        assertEquals(a.id to 6, cursor()) // where the two met
+        assertEquals("https://w.example", a.url) // the URL and bullets come along
+        assertEquals("kid", names(a))
+        assertSame(a, Store.shareTarget)
+        // both with a URL: nothing happens, so neither is lost
+        val (c) = mk("c")
+        c.url = "https://c.example"
+        assertFalse(Store.backspaceAtStart(c))
+        assertTrue(Store.isAlive(c))
+        // an empty bullet just goes
+        val (empty) = mk("")
+        assertTrue(Store.backspaceAtStart(empty))
+        assertFalse(Store.isAlive(empty))
+        assertEquals("c", c.plain)
+        assertEquals(c.id to 1, cursor())
+        // first in its list, or on Home: nothing above
+        val (first) = mk("x", parent = a)
+        Store.reorder(first, 0)
+        assertFalse(Store.backspaceAtStart(first))
+        Store.reorder(c, 0)
+        assertFalse(Store.backspaceAtStart(c))
+    }
+
+    @Test
+    fun aDraggedGroupLandsTogether() {
+        val (_, two, _, _, five) = mk("1", "2", "3", "4", "5")
+        Store.placeTogether(listOf(five, two), 0) // apart, and handed over in any order
+        assertEquals("2,5,1,3,4", names(root))
+        Store.placeTogether(listOf(two, five), 3)
+        assertEquals("1,3,4,2,5", names(root))
     }
 
     @Test

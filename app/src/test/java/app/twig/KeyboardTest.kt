@@ -6,11 +6,13 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.isFocused
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextInputSelection
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.test.pressKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.twig.data.Store
@@ -41,7 +43,7 @@ class KeyboardTest {
     /** Listens in between Compose and Android's keyboard service. */
     private fun listen() = rule.runOnUiThread {
         val view = find(rule.activity.window.decorView)!!
-        val service = view.javaClass.getDeclaredField("legacyTextInputServiceAndroid").apply { isAccessible = true }.get(view)
+        val service = view.javaClass.getDeclaredMethod("getLegacyTextInputServiceAndroid").apply { isAccessible = true }.invoke(view)
         val imm = service.javaClass.getDeclaredField("inputMethodManager").apply { isAccessible = true }
         val real = imm.get(service)
         imm.set(service, Proxy.newProxyInstance(imm.type.classLoader, arrayOf(imm.type)) { _, m, args ->
@@ -73,5 +75,11 @@ class KeyboardTest {
         assertEquals(once, step { rule.onNode(isFocused()).performTextInput("\n") })
         assertEquals(once, step { rule.onNode(isFocused()).performKeyInput { pressKey(Key.Backspace) } })
         assertEquals(pasta.id, Store.focusedId)
+        // Enter in the middle, then Backspace at the start of the new bullet joins them again
+        rule.onNode(isFocused()).performTextInputSelection(TextRange(6))
+        assertEquals(once, step { rule.onNode(isFocused()).performTextInput("\n") })
+        assertEquals(once, step { rule.onNode(isFocused()).performKeyInput { pressKey(Key.Backspace) } })
+        assertEquals(pasta.id, Store.focusedId)
+        assertEquals("Learn to make fresh pasta", pasta.plain)
     }
 }

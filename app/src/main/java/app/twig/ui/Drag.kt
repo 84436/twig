@@ -20,6 +20,8 @@ import kotlinx.coroutines.launch
 /**
  * Drag to reorder bullets on one page. While dragging, the list shows [preview] (the page's bullets
  * with the dragged one wherever the finger is); on drop that position goes to the store.
+ * Dragging a selected bullet takes the whole selection: the others fold into it while it moves and
+ * land next to it, in list order.
  */
 class DragState(
     private val listState: LazyListState,
@@ -30,6 +32,9 @@ class DragState(
     var draggingId by mutableStateOf<Long?>(null)
         private set
     var preview by mutableStateOf<List<Node>?>(null)
+        private set
+    /** The bullets moving together, in list order: the dragged one plus the rest of the selection. */
+    var group by mutableStateOf<List<Node>>(emptyList())
         private set
 
     /** Row that was just dropped and is easing into its slot. */
@@ -55,10 +60,11 @@ class DragState(
         return visualTop(i.size) - i.offset
     }
 
-    fun start(node: Node, rows: List<Node>): Boolean {
+    fun start(node: Node, rows: List<Node>, selection: Set<Long>? = null): Boolean {
         if (draggingId != null) return false
         val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == node.id } ?: return false
-        preview = rows
+        group = if (selection == null) listOf(node) else rows.filter { it.id in selection }
+        preview = rows.filter { it === node || it !in group }
         startOffset = item.offset
         dy = 0f
         draggingId = node.id
@@ -136,10 +142,11 @@ class DragState(
         val fromY = offsetY()
         if (commit && list != null) {
             val k = list.indexOfFirst { it.id == id }
-            if (k >= 0) Store.reorder(list[k], k)
+            if (k >= 0) Store.placeTogether(group, k)
         }
         draggingId = null
         preview = null
+        group = emptyList()
         dy = 0f
         settlingId = id
         scope.launch {
